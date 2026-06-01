@@ -1,0 +1,2583 @@
+/**
+ * Document Generator Module
+ * Generates Markdown, HTML, and JSON documentation from parsed TMDL model
+ */
+
+class DocGenerator {
+    /**
+     * @param {Object} model - Parsed TMDL model from TMDLParser
+     * @param {Object} visualUsage - Visual usage data from VisualParser (optional)
+     * @param {Object} measureRefs - DAX reference data (optional)
+     */
+    constructor(model, visualUsage, measureRefs, lineageEngine) {
+        this.model = model;
+        this.visualUsage = visualUsage || {};
+        this.measureRefs = measureRefs || {};
+        this.lineageEngine = lineageEngine || null;
+        this.mSteps = lineageEngine?.mSteps || null;
+    }
+
+    /**
+     * Get tables filtered to exclude auto-date tables
+     */
+    _getVisibleTables() {
+        return this.model.tables.filter(t => !t._isAutoDate);
+    }
+
+    _getAutoDateCount() {
+        return this.model.tables.filter(t => t._isAutoDate).length;
+    }
+
+    // ──────────────────────────────────────────────
+    // MARKDOWN
+    // ──────────────────────────────────────────────
+
+    generateMarkdown(scope = 'all', visualData = null) {
+        if (scope === 'model') return this._generateMarkdownModel();
+        if (scope === 'visuals') return this._generateMarkdownVisuals(visualData);
+        return this._generateMarkdownAll(visualData);
+    }
+
+    _generateMarkdownAll(visualData) {
+        const lines = [];
+        const modelName = this.model.database?.name || this.model.model?.name || 'Semantic Model';
+        const tables = this.model.tables.filter(t => !t._isAutoDate);
+        const autoDateCount = this.model.tables.length - tables.length;
+
+        lines.push(`# ${modelName} — Full Documentation`);
+        lines.push('');
+        const totalMeasures = tables.reduce((s, t) => s + t.measures.length, 0);
+        lines.push(`*Generated with [PBIP SemLin](https://bredeespelid.github.io/PBIP_SemLin/) — tool for Power BI semantic model documentation (${totalMeasures} measures documented on ${new Date().toLocaleDateString()})*`);
+        lines.push('');
+
+        // Table of Contents
+        lines.push('## Table of Contents');
+        lines.push('');
+        lines.push('- [Model Overview](#model-overview)');
+        lines.push('- [Table Inventory](#table-inventory)');
+
+        for (const table of tables) {
+            const anchor = table.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            lines.push(`  - [${table.name}](#${anchor})`);
+        }
+
+        lines.push('- [Measure Catalog](#measure-catalog)');
+        lines.push('- [Relationships](#relationships)');
+
+        if (this.model.roles.length > 0) {
+            lines.push('- [Roles](#roles)');
+        }
+        if (this.model.expressions.length > 0) {
+            lines.push('- [Expressions](#expressions)');
+        }
+        if (visualData && visualData.pages.length > 0) {
+            lines.push('- [Report Pages & Visual Layout](#report-pages--visual-layout)');
+        }
+        if (Object.keys(this.visualUsage).length > 0) {
+            lines.push('- [Visual Usage](#visual-usage)');
+        }
+        if (this.lineageEngine) {
+            const ds = this.lineageEngine.getAllDataSources();
+            if (ds.length > 0) lines.push('- [Data Sources](#data-sources)');
+            lines.push('- [Measure Dependencies](#measure-dependencies)');
+            if (visualData && visualData.visuals && visualData.visuals.length > 0) {
+                lines.push('- [Visual Lineage Summary](#visual-lineage-summary)');
+            }
+        }
+
+        // Dynamic Features TOC entry
+        const dynTables = this._getDynamicFeaturesTables();
+        if (dynTables.fieldParams.length > 0 || dynTables.calcGroups.length > 0) {
+            lines.push('- [Dynamic Features](#dynamic-features)');
+        }
+
+        lines.push('');
+
+        // Executive Summary (product owner overview — appears first)
+        this._appendMarkdownExecutiveSummary(lines, visualData);
+
+        // Model sections
+        this._appendMarkdownModelSections(lines);
+
+        // Report Pages & Visual Layout
+        if (visualData && visualData.pages.length > 0) {
+            this._appendMarkdownVisualSections(lines, visualData);
+        }
+
+        // Visual Usage Summary
+        if (Object.keys(this.visualUsage).length > 0) {
+            this._appendMarkdownVisualUsageSummary(lines);
+        }
+
+        // Data Lineage sections
+        this._appendMarkdownLineageSections(lines, visualData);
+
+        // Dynamic Features Summary
+        this._appendMarkdownDynamicFeatures(lines, visualData);
+
+        // Footer
+        lines.push('---');
+        lines.push('');
+        lines.push(`> **Generated with [PBIP SemLin](https://bredeespelid.github.io/PBIP_SemLin/)** — tool for Power BI semantic model documentation with visual lineage.`);
+
+        return lines.join('\n');
+    }
+
+    _generateMarkdownModel() {
+        const lines = [];
+        const modelName = this.model.database?.name || this.model.model?.name || 'Semantic Model';
+
+        lines.push(`# ${modelName} — Semantic Model Documentation`);
+        lines.push('');
+        const totalMeasuresMd = this.model.tables.reduce((s, t) => s + t.measures.length, 0);
+        lines.push(`*Generated with [PBIP SemLin](https://bredeespelid.github.io/PBIP_SemLin/) — tool for Power BI semantic model documentation (${totalMeasuresMd} measures documented on ${new Date().toLocaleDateString()})*`);
+        lines.push('');
+
+        // Table of Contents
+        lines.push('## Table of Contents');
+        lines.push('');
+        lines.push('- [Model Overview](#model-overview)');
+        lines.push('- [Table Inventory](#table-inventory)');
+        for (const table of this._getVisibleTables()) {
+            const anchor = table.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            lines.push(`  - [${table.name}](#${anchor})`);
+        }
+        lines.push('- [Measure Catalog](#measure-catalog)');
+        lines.push('- [Relationships](#relationships)');
+        if (this.model.roles.length > 0) lines.push('- [Roles](#roles)');
+        if (this.model.expressions.length > 0) lines.push('- [Expressions](#expressions)');
+        lines.push('');
+
+        // Model sections (no visual usage per measure)
+        this._appendMarkdownModelSections(lines, false);
+
+        // Footer
+        lines.push('---');
+        lines.push('');
+        lines.push(`> **Generated with [PBIP SemLin](https://bredeespelid.github.io/PBIP_SemLin/)** — tool for Power BI semantic model documentation.`);
+
+        return lines.join('\n');
+    }
+
+    _generateMarkdownVisuals(visualData) {
+        const lines = [];
+        const modelName = this.model.database?.name || this.model.model?.name || 'Semantic Model';
+
+        lines.push(`# ${modelName} — Visual Documentation`);
+        lines.push('');
+        lines.push(`*Generated with [PBIP SemLin](https://bredeespelid.github.io/PBIP_SemLin/) — tool for Power BI semantic model documentation (${new Date().toLocaleDateString()})*`);
+        lines.push('');
+
+        if (!visualData || visualData.pages.length === 0) {
+            lines.push('*No report visual data available.*');
+            lines.push('');
+            lines.push('---');
+            lines.push(`*Generated with [PBIP SemLin](https://bredeespelid.github.io/PBIP_SemLin/)*`);
+            return lines.join('\n');
+        }
+
+        // Summary
+        lines.push('## Report Summary');
+        lines.push('');
+        lines.push('| Property | Value |');
+        lines.push('|----------|-------|');
+        lines.push(`| Pages | ${visualData.pages.length} |`);
+        lines.push(`| Total Visuals | ${visualData.visuals.length} |`);
+        lines.push('');
+
+        // Pages & Visual Layout
+        this._appendMarkdownVisualSections(lines, visualData);
+
+        // Visual Usage Cross-Reference
+        if (Object.keys(this.visualUsage).length > 0) {
+            this._appendMarkdownVisualUsageSummary(lines);
+        }
+
+        // Footer
+        lines.push('---');
+        lines.push('');
+        lines.push(`> **Generated with [PBIP SemLin](https://bredeespelid.github.io/PBIP_SemLin/)** — tool for Power BI semantic model documentation.`);
+
+        return lines.join('\n');
+    }
+
+    /**
+     * Executive Summary — product owner at-a-glance view.
+     * Appears at the top of full exports. Covers model stats, top measures, top source tables.
+     */
+    _appendMarkdownExecutiveSummary(lines, visualData) {
+        const tables   = this._getVisibleTables();
+        const autoDate = this._getAutoDateCount();
+        const totalMeasures = tables.reduce((s, t) => s + t.measures.length, 0);
+        const totalCols     = tables.reduce((s, t) => s + t.columns.length, 0);
+        const dynTables     = this._getDynamicFeaturesTables();
+        const dynCount      = dynTables.fieldParams.length + dynTables.calcGroups.length;
+
+        lines.push('## Executive Summary');
+        lines.push('');
+        lines.push('| | |');
+        lines.push('|---|---|');
+        lines.push(`| Tables | ${tables.length}${autoDate > 0 ? ` *(${autoDate} auto-date hidden)*` : ''} |`);
+        lines.push(`| Columns | ${totalCols} |`);
+        lines.push(`| Measures | ${totalMeasures} |`);
+        lines.push(`| Relationships | ${this.model.relationships.length} |`);
+        if (visualData) {
+            lines.push(`| Report Pages | ${visualData.pages.length} |`);
+            lines.push(`| Visuals | ${visualData.visuals.length} |`);
+        }
+        if (this.lineageEngine) {
+            lines.push(`| Data Sources | ${this.lineageEngine.getAllDataSources().length} |`);
+        }
+        if (dynCount > 0) {
+            lines.push(`| Dynamic Features | ${dynCount} (${dynTables.fieldParams.length} field param${dynTables.fieldParams.length !== 1 ? 's' : ''}, ${dynTables.calcGroups.length} calc group${dynTables.calcGroups.length !== 1 ? 's' : ''}) |`);
+        }
+        if (this.lineageEngine?.brokenRefs?.length > 0) {
+            lines.push(`| Broken References | ${this.lineageEngine.brokenRefs.length} |`);
+        }
+        lines.push('');
+
+        // Top 5 measures by visual coverage
+        if (this.lineageEngine && visualData) {
+            const topMeasures = this.lineageEngine.getTopMeasuresByVisualCount(5);
+            if (topMeasures.length > 0) {
+                lines.push('### Top Measures by Report Coverage');
+                lines.push('');
+                lines.push('| Measure | Table | Visuals | Pages |');
+                lines.push('|---------|-------|---------|-------|');
+                for (const m of topMeasures) {
+                    lines.push(`| ${this._escMd(m.name)} | ${this._escMd(m.table)} | ${m.visualCount} | ${m.pageCount} |`);
+                }
+                lines.push('');
+            }
+
+            // Top 5 source tables by consumption
+            const topSources = this.lineageEngine.getTopSourceTablesByConsumption(5);
+            if (topSources.length > 0) {
+                lines.push('### Top Source Tables by Downstream Coverage');
+                lines.push('');
+                lines.push('| Physical Table | Schema | Model Table | Measures | Visuals |');
+                lines.push('|---------------|--------|-------------|----------|---------|');
+                for (const s of topSources) {
+                    lines.push(`| ${this._escMd(s.physicalTable)} | ${this._escMd(s.physicalSchema || '')} | ${this._escMd(s.modelTable)} | ${s.measureCount} | ${s.visualCount} |`);
+                }
+                lines.push('');
+            }
+        }
+    }
+
+    /**
+     * Append model sections (overview, tables, measures, relationships, roles, expressions)
+     * @param {boolean} includeVisualUsage - Whether to include visual usage per measure
+     */
+    _appendMarkdownModelSections(lines, includeVisualUsage = true) {
+        // Model Overview
+        lines.push('## Model Overview');
+        lines.push('');
+        lines.push('| Property | Value |');
+        lines.push('|----------|-------|');
+
+        if (this.model.database?.name) {
+            lines.push(`| Database | ${this.model.database.name} |`);
+        }
+        if (this.model.database?.compatibilityLevel) {
+            lines.push(`| Compatibility Level | ${this.model.database.compatibilityLevel} |`);
+        }
+        if (this.model.model?.culture) {
+            lines.push(`| Culture | ${this.model.model.culture} |`);
+        }
+
+        const visibleTables = this._getVisibleTables();
+        const autoDateCount = this._getAutoDateCount();
+        const totalMeasures = visibleTables.reduce((sum, t) => sum + t.measures.length, 0);
+        const totalColumns = visibleTables.reduce((sum, t) => sum + t.columns.length, 0);
+
+        lines.push(`| Tables | ${visibleTables.length} |`);
+        lines.push(`| Columns | ${totalColumns} |`);
+        lines.push(`| Measures | ${totalMeasures} |`);
+        lines.push(`| Relationships | ${this.model.relationships.length} |`);
+        lines.push(`| Roles | ${this.model.roles.length} |`);
+        lines.push('');
+        if (autoDateCount > 0) {
+            lines.push(`> *${autoDateCount} auto-date/time tables hidden*`);
+            lines.push('');
+        }
+
+        // Table Inventory
+        lines.push('## Table Inventory');
+        lines.push('');
+
+        for (const table of this._getVisibleTables()) {
+            lines.push(`### ${table.name}`);
+            lines.push('');
+
+            if (table.description) {
+                lines.push(`> ${table.description}`);
+                lines.push('');
+            }
+
+            if (table.isHidden) {
+                lines.push('*Hidden table*');
+                lines.push('');
+            }
+
+            // Field parameter detection
+            const fpItems = this._getFieldParameterItems(table.name);
+            if (fpItems !== null) {
+                lines.push('**Field Parameter** — This table is a dynamic field selector.');
+                lines.push('');
+                if (fpItems.length > 0) {
+                    lines.push('Available fields:');
+                    for (const item of fpItems) {
+                        lines.push(`- \`'${item.table}'[${item.column}]\``);
+                    }
+                    lines.push('');
+                }
+            }
+
+            // Calculation Group
+            if (table.calculationGroup && table.calculationGroup.items.length > 0) {
+                const cgPrec = table.calculationGroup.precedence != null ? ` (precedence: ${table.calculationGroup.precedence})` : '';
+                lines.push(`#### Calculation Group${cgPrec} (${table.calculationGroup.items.length} items)`);
+                lines.push('');
+                const sortedCgItems = [...table.calculationGroup.items]
+                    .sort((a, b) => (a.ordinal ?? 999) - (b.ordinal ?? 999));
+                for (const item of sortedCgItems) {
+                    const ordinalStr = item.ordinal != null ? ` [${item.ordinal}]` : '';
+                    const usesSM = /\bSELECTEDMEASURE\s*\(/i.test(item.expression || '');
+                    lines.push(`##### ${this._escMd(item.name)}${ordinalStr}${usesSM ? ' — dynamic' : ''}`);
+                    lines.push('');
+                    if (item.expression) {
+                        lines.push('```dax');
+                        lines.push(item.expression);
+                        lines.push('```');
+                        lines.push('');
+                    }
+                }
+            }
+
+            // Columns
+            if (table.columns.length > 0) {
+                lines.push('#### Columns');
+                lines.push('');
+                lines.push('| Column | Data Type | Sort By | Summarize | Hidden | Format |');
+                lines.push('|--------|-----------|---------|-----------|--------|--------|');
+
+                for (const col of table.columns) {
+                    const hidden = col.isHidden ? 'Yes' : '';
+                    const fmt = col.formatString || '';
+                    const sortBy = col.sortByColumn || '';
+                    const summarize = col.summarizeBy || '';
+                    const calcBadge = col.expression ? ' (calc)' : '';
+                    lines.push(`| ${this._escMd(col.name)}${calcBadge} | ${col.dataType || ''} | ${this._escMd(sortBy)} | ${summarize} | ${hidden} | ${this._escMd(fmt)} |`);
+                }
+                lines.push('');
+
+                // Column Where Used — for data engineer perspective
+                if (this.lineageEngine) {
+                    const usedRows = [];
+                    for (const col of table.columns) {
+                        if (col.isHidden) continue; // skip hidden utility columns
+                        const consumers = this.lineageEngine.getColumnConsumers(table.name, col.name);
+                        if (consumers.measures.length === 0 && consumers.directVisuals.length === 0) continue;
+                        const measuresStr = consumers.measures.map(m => `\`[${m.name}]\``).join(', ');
+                        const visualsStr  = consumers.directVisuals.map(v => `${v.page}: ${v.name}`).join('; ');
+                        usedRows.push(`| ${this._escMd(col.name)} | ${measuresStr} | ${this._escMd(visualsStr)} |`);
+                    }
+                    if (usedRows.length > 0) {
+                        lines.push('#### Column Usage (Where Used)');
+                        lines.push('');
+                        lines.push('| Column | Referenced by Measures | Used in Visuals |');
+                        lines.push('|--------|------------------------|-----------------|');
+                        for (const row of usedRows) lines.push(row);
+                        lines.push('');
+                    }
+                }
+            }
+
+            // Measures
+            if (table.measures.length > 0) {
+                lines.push('#### Measures');
+                lines.push('');
+
+                for (const measure of table.measures) {
+                    lines.push(`##### ${this._escMd(measure.name)}`);
+                    lines.push('');
+
+                    if (measure.description) {
+                        lines.push(`> ${this._escMd(measure.description)}`);
+                        lines.push('');
+                    }
+
+                    if (measure.displayFolder) {
+                        lines.push(`**Display Folder:** ${measure.displayFolder}`);
+                        lines.push('');
+                    }
+
+                    if (measure.formatString) {
+                        lines.push(`**Format:** ${this._escMd(measure.formatString)}`);
+                        lines.push('');
+                    }
+
+                    if (measure.expression) {
+                        lines.push('```dax');
+                        lines.push(measure.expression);
+                        lines.push('```');
+                        lines.push('');
+                    }
+
+                    // DAX references
+                    const refs = this.measureRefs[measure.name];
+                    if (refs) {
+                        if (refs.columnRefs.length > 0) {
+                            lines.push('**Referenced columns:** ' + refs.columnRefs.map(r => `\`${r.table}[${r.column}]\``).join(', '));
+                            lines.push('');
+                        }
+                        if (refs.measureRefs.length > 0) {
+                            lines.push('**Referenced measures:** ' + refs.measureRefs.map(r => `\`[${r}]\``).join(', '));
+                            lines.push('');
+                        }
+                    }
+
+                    // Visual usage (only in 'all' scope)
+                    if (includeVisualUsage) {
+                        const usageKey = `measure|${table.name}|${measure.name}`;
+                        const usage = this.visualUsage[usageKey];
+                        if (usage && usage.length > 0) {
+                            lines.push('**Used in visuals:**');
+                            const byPage = this._groupByPage(usage);
+                            for (const [page, visuals] of Object.entries(byPage)) {
+                                lines.push(`- *${page}*: ${visuals.map(v => v.visualName).join(', ')}`);
+                            }
+                            lines.push('');
+                        }
+                    }
+                }
+            }
+
+            // Hierarchies
+            if (table.hierarchies.length > 0) {
+                lines.push('#### Hierarchies');
+                lines.push('');
+                for (const h of table.hierarchies) {
+                    lines.push(`- **${h.name}**: ${h.levels.map(l => l.name || l.column).join(' → ')}`);
+                }
+                lines.push('');
+            }
+
+            // M Steps (parsed Power Query steps)
+            if (this.mSteps) {
+                const steps = this.mSteps.get(table.name);
+                if (steps && steps.length > 0) {
+                    lines.push('#### Power Query Steps');
+                    lines.push('');
+                    steps.forEach((step, idx) => {
+                        const preview = step.exprText.length > 120 ? step.exprText.slice(0, 120) + '…' : step.exprText;
+                        lines.push(`${idx + 1}. **${step.name}** \`[${step.kind}]\` — \`${preview.replace(/`/g, "'")}\``);
+                    });
+                    lines.push('');
+                }
+            }
+
+            // Partitions
+            if (table.partitions.length > 0) {
+                lines.push('#### Partitions');
+                lines.push('');
+                for (const p of table.partitions) {
+                    lines.push(`- **${p.name}** (mode: ${p.mode || 'default'}, type: ${p.sourceType || 'M'})`);
+                    if (p.source) {
+                        lines.push('');
+                        lines.push('  <details><summary>M Query</summary>');
+                        lines.push('');
+                        lines.push('  ```m');
+                        lines.push(p.source.split('\n').map(l => '  ' + l).join('\n'));
+                        lines.push('  ```');
+                        lines.push('');
+                        lines.push('  </details>');
+                        lines.push('');
+                    }
+                }
+                lines.push('');
+            }
+        }
+
+        // Measure Catalog (flat list)
+        lines.push('## Measure Catalog');
+        lines.push('');
+        lines.push('| # | Measure | Table | Display Folder | Format | Description |');
+        lines.push('|---|---------|-------|----------------|--------|-------------|');
+
+        let measureNum = 0;
+        for (const table of this._getVisibleTables()) {
+            for (const m of table.measures) {
+                measureNum++;
+                lines.push(`| ${measureNum} | ${this._escMd(m.name)} | ${table.name} | ${m.displayFolder || ''} | ${this._escMd(m.formatString || '')} | ${this._escMd(m.description || '')} |`);
+            }
+        }
+        lines.push('');
+
+        // Relationships
+        lines.push('## Relationships');
+        lines.push('');
+
+        if (this.model.relationships.length > 0) {
+            lines.push('| From | → | To | Cardinality | Cross-Filter | Active |');
+            lines.push('|------|---|-----|-------------|--------------|--------|');
+
+            for (const r of this.model.relationships) {
+                const from = `${r.fromTable}[${r.fromColumn}]`;
+                const to = `${r.toTable}[${r.toColumn}]`;
+                const card = this._formatCardinality(r);
+                const crossFilter = r.crossFilteringBehavior || 'single';
+                const active = r.isActive ? 'Yes' : 'No';
+                lines.push(`| ${from} | → | ${to} | ${card} | ${crossFilter} | ${active} |`);
+            }
+        } else {
+            lines.push('*No relationships defined.*');
+        }
+        lines.push('');
+
+        // Roles
+        if (this.model.roles.length > 0) {
+            lines.push('## Roles');
+            lines.push('');
+
+            for (const role of this.model.roles) {
+                lines.push(`### ${role.name}`);
+                lines.push('');
+
+                if (role.modelPermission) {
+                    lines.push(`**Permission:** ${role.modelPermission}`);
+                    lines.push('');
+                }
+
+                if (role.tablePermissions.length > 0) {
+                    lines.push('| Table | Filter Expression |');
+                    lines.push('|-------|-------------------|');
+                    for (const tp of role.tablePermissions) {
+                        lines.push(`| ${tp.table} | \`${this._escMd(tp.filterExpression || '')}\` |`);
+                    }
+                    lines.push('');
+                }
+            }
+        }
+
+        // Expressions
+        if (this.model.expressions.length > 0) {
+            lines.push('## Expressions');
+            lines.push('');
+
+            for (const expr of this.model.expressions) {
+                lines.push(`### ${expr.name}`);
+                if (expr.kind) lines.push(`**Kind:** ${expr.kind}`);
+                lines.push('');
+                if (expr.expression) {
+                    lines.push('```m');
+                    lines.push(expr.expression);
+                    lines.push('```');
+                    lines.push('');
+                }
+            }
+        }
+    }
+
+    /**
+     * Append visual/report page sections to markdown.
+     * Includes ASCII layout diagrams per page and field param / calc group annotations.
+     */
+    _appendMarkdownVisualSections(lines, visualData) {
+        lines.push('## Report Pages & Visual Layout');
+        lines.push('');
+
+        for (const page of visualData.pages) {
+            lines.push(`### ${this._escMd(page.displayName)}`);
+            lines.push('');
+            lines.push(`*${page.visuals.length} visual(s)${page.pageWidth ? ` \u2014 ${page.pageWidth}\u00d7${page.pageHeight}` : ''}*`);
+            lines.push('');
+
+            if (page.visuals.length === 0) {
+                lines.push('*No visuals on this page.*');
+                lines.push('');
+                continue;
+            }
+
+            // ASCII layout diagram
+            const asciiLayout = this._renderAsciiLayout(page);
+            if (asciiLayout) {
+                lines.push(asciiLayout);
+                lines.push('');
+            }
+
+            for (const visual of page.visuals) {
+                const vName = visual.visualName || visual.visualType || 'Visual';
+                lines.push(`#### ${this._escMd(vName)} (\`${visual.visualType || 'unknown'}\`)`);
+                lines.push('');
+
+                if (visual.fields && visual.fields.length > 0) {
+                    lines.push('| Role | Field | Notes |');
+                    lines.push('|------|-------|-------|');
+                    const fpTablesSeen = new Set();
+                    const cgTablesSeen = new Set();
+                    for (const f of visual.fields) {
+                        const role = this._normalizeRoleForReport(f.projectionName);
+                        const tableName = f.table || f.entity || '';
+                        const name = f.name || f.column || f.hierarchy || '';
+                        let notes = '';
+                        const fpItems = this._getFieldParameterItems(tableName);
+                        if (fpItems !== null) {
+                            notes = `Field Param (${fpItems.length} field${fpItems.length !== 1 ? 's' : ''})`;
+                            fpTablesSeen.add(tableName);
+                        } else {
+                            const cgItems = this._getCalculationGroupItems(tableName);
+                            if (cgItems !== null) {
+                                notes = `Calc Group (${cgItems.length} item${cgItems.length !== 1 ? 's' : ''})`;
+                                cgTablesSeen.add(tableName);
+                            }
+                        }
+                        lines.push(`| ${role} | ${this._escMd(tableName)}[${this._escMd(name)}] | ${notes} |`);
+                    }
+                    lines.push('');
+
+                    // Field parameter details
+                    for (const tbl of fpTablesSeen) {
+                        const fpItems = this._getFieldParameterItems(tbl);
+                        if (fpItems && fpItems.length > 0) {
+                            lines.push(`> **Field Parameter: '${this._escMd(tbl)}'** — ${fpItems.length} available field${fpItems.length !== 1 ? 's' : ''}:`);
+                            lines.push(`> ${fpItems.map(i => `\`'${i.table}'[${i.column}]\``).join(', ')}`);
+                            lines.push('');
+                        }
+                    }
+
+                    // Calculation group details
+                    for (const tbl of cgTablesSeen) {
+                        const cgItems = this._getCalculationGroupItems(tbl);
+                        if (cgItems && cgItems.length > 0) {
+                            lines.push(`> **Calculation Group: '${this._escMd(tbl)}'** — ${cgItems.length} item${cgItems.length !== 1 ? 's' : ''}:`);
+                            for (const item of cgItems) {
+                                lines.push(`> - **${this._escMd(item.name)}**`);
+                                if (item.expression) {
+                                    lines.push(`>   \`\`\`dax`);
+                                    for (const exprLine of item.expression.split('\n')) {
+                                        lines.push(`>   ${exprLine}`);
+                                    }
+                                    lines.push(`>   \`\`\``);
+                                }
+                            }
+                            lines.push('');
+                        }
+                    }
+                } else {
+                    lines.push('*No data fields*');
+                    lines.push('');
+                }
+            }
+        }
+    }
+
+    /**
+     * Append visual usage cross-reference summary
+     */
+    _appendMarkdownVisualUsageSummary(lines) {
+        lines.push('## Visual Usage');
+        lines.push('');
+        lines.push('| Field | Type | Table | Used In |');
+        lines.push('|-------|------|-------|---------|');
+
+        for (const [key, usages] of Object.entries(this.visualUsage)) {
+            const [type, table, field] = key.split('|');
+            const visualList = usages.map(u => `${u.pageName}: ${u.visualName}`).join('; ');
+            lines.push(`| ${field} | ${type} | ${table} | ${visualList} |`);
+        }
+        lines.push('');
+    }
+
+    /**
+     * Append data lineage sections to markdown
+     */
+    _appendMarkdownLineageSections(lines, visualData) {
+        if (!this.lineageEngine) return;
+
+        // Data Sources section — expanded with physical table mapping and consumer catalog
+        const dataSources = this.lineageEngine.getAllDataSources();
+        if (dataSources.length > 0) {
+            lines.push('## Data Sources');
+            lines.push('');
+            lines.push('> Data engineer view: for each source, which physical tables were loaded, how columns were renamed, and which model measures and report visuals consume them.');
+            lines.push('');
+            for (const src of dataSources) {
+                const server = src.serverResolved || src.server || src.url || src.path || '';
+                const db     = src.databaseResolved || src.database || '';
+                const gw     = src.gatewayRequired === true ? ' · Gateway Required' : src.gatewayRequired === false ? '' : '';
+                const paramStr = src.parameterized ? ' · Parameterized' : '';
+                const nonLoadedStr = src.isNonLoadedQuery ? ` · *Non-loaded query: \`${this._escMd(src.expressionName || '')}\`*` : '';
+                const sourceId = `source:${MExpressionParser._sourceKey(src)}`;
+                const consumers = this.lineageEngine.getDataSourceConsumers(sourceId);
+
+                const header = [src.type, server, db].filter(Boolean).join(' / ');
+                lines.push(`### ${this._escMd(header)}${paramStr}${gw}${nonLoadedStr}`);
+                lines.push('');
+
+                if (src.isNonLoadedQuery && consumers.tables.length > 0) {
+                    lines.push(`**Referenced by tables (via merge/append/delegation): ${consumers.tables.length}**`);
+                    lines.push('');
+                    for (const t of consumers.tables) {
+                        lines.push(`- **${this._escMd(t.name)}**`);
+                    }
+                    lines.push('');
+                } else if (consumers.tables.length > 0) {
+                    lines.push(`**Physical tables loaded: ${consumers.tables.length}**`);
+                    lines.push('');
+                    for (const t of consumers.tables) {
+                        const physLabel = [t.physicalSchema, t.physicalTable].filter(Boolean).join('.');
+                        const arrow = physLabel ? ` ← \`${physLabel}\`` : '';
+                        lines.push(`- **${this._escMd(t.name)}**${arrow}`);
+                        if (t.renames.length > 0) {
+                            const renameStr = t.renames.map(r => `\`${r.sourceName}\` → \`${r.modelName}\``).join(', ');
+                            lines.push(`  - Column renames: ${renameStr}`);
+                        }
+                        if (t.addedColumns.length > 0) {
+                            lines.push(`  - Computed columns: ${t.addedColumns.map(c => `\`${c}\``).join(', ')}`);
+                        }
+                    }
+                    lines.push('');
+                }
+
+                const mCount = consumers.measures.length;
+                const vCount = consumers.visuals.length;
+                const pCount = consumers.pages.length;
+                if (mCount > 0 || vCount > 0) {
+                    lines.push(`**Consumed by:** ${mCount} measure${mCount !== 1 ? 's' : ''} · ${vCount} visual${vCount !== 1 ? 's' : ''} across ${pCount} page${pCount !== 1 ? 's' : ''}`);
+                    lines.push('');
+                    if (consumers.measures.length > 0) {
+                        lines.push('Measures: ' + consumers.measures.slice(0, 10).map(m => `\`[${m.name}]\``).join(', ') +
+                            (consumers.measures.length > 10 ? ` *(+${consumers.measures.length - 10} more)*` : ''));
+                        lines.push('');
+                    }
+                }
+            }
+        }
+
+        // Physical-Source Index — keyed by physical schema.table, listing model consumers
+        if (this.lineageEngine && this.lineageEngine.tableLineage && this.lineageEngine.tableLineage.size > 0) {
+            // Build index: physicalKey → { schema, table, modelTables[], measures[], visuals[] }
+            const physIndex = new Map();
+            for (const [tableName, lineage] of this.lineageEngine.tableLineage) {
+                if (!lineage.physicalTable) continue;
+                const key = [lineage.physicalSchema, lineage.physicalTable].filter(Boolean).join('.');
+                if (!physIndex.has(key)) {
+                    physIndex.set(key, {
+                        physicalSchema: lineage.physicalSchema,
+                        physicalTable: lineage.physicalTable,
+                        modelTables: [],
+                        renames: lineage.renames || []
+                    });
+                }
+                physIndex.get(key).modelTables.push(tableName);
+            }
+
+            if (physIndex.size > 0) {
+                lines.push('## Physical-Source Index');
+                lines.push('');
+                lines.push('> Maps every physical database object to the model tables and downstream visuals that depend on it.');
+                lines.push('');
+                lines.push('| Physical Object | Model Table(s) | Consumers |');
+                lines.push('|-----------------|----------------|-----------|');
+                for (const [key, entry] of physIndex) {
+                    const modelList = entry.modelTables.join(', ');
+                    // Count downstream consumers through lineage engine
+                    let measureCount = 0, visualCount = 0;
+                    for (const mt of entry.modelTables) {
+                        const consumers = this.lineageEngine.getPhysicalTableConsumers
+                            ? this.lineageEngine.getPhysicalTableConsumers(entry.physicalSchema, entry.physicalTable)
+                            : null;
+                        if (consumers) { measureCount += consumers.measures?.length || 0; visualCount += consumers.visuals?.length || 0; }
+                    }
+                    const consumerStr = measureCount || visualCount ? `${measureCount} measure${measureCount!==1?'s':''} · ${visualCount} visual${visualCount!==1?'s':''}` : '—';
+                    lines.push(`| \`${this._escMd(key)}\` | ${this._escMd(modelList)} | ${consumerStr} |`);
+                }
+                lines.push('');
+            }
+        }
+
+        // Measure Dependencies section
+        const allMeasures = [];
+        for (const table of this._getVisibleTables()) {
+            for (const measure of table.measures) {
+                const chain = this.lineageEngine.resolveMeasureChain(measure.name);
+                if (chain.length > 0) {
+                    allMeasures.push({ name: measure.name, table: table.name, chain });
+                }
+            }
+        }
+        if (allMeasures.length > 0) {
+            lines.push('## Measure Dependencies');
+            lines.push('');
+            lines.push('| Measure | Table | Depends On |');
+            lines.push('|---------|-------|------------|');
+            for (const m of allMeasures) {
+                const deps = m.chain.map(d => `[${d.name}]`).join(' \u2192 ');
+                lines.push(`| ${m.name} | ${m.table} | ${deps} |`);
+            }
+            lines.push('');
+        }
+
+        // Visual Lineage — per-visual back-trace
+        if (visualData && visualData.visuals && visualData.visuals.length > 0 && this.lineageEngine) {
+            const DECORATION_TYPES = new Set(['actionButton','shape','textbox','bookmarkNavigator','pageNavigator','image','groupContainer']);
+            const dataBoundVisuals = visualData.visuals.filter(v => !DECORATION_TYPES.has(v.visualType) && v.fields && v.fields.length > 0);
+
+            if (dataBoundVisuals.length > 0) {
+                lines.push('## Visual Lineage');
+                lines.push('');
+
+                for (const visual of dataBoundVisuals) {
+                    lines.push(`### ${visual.visualName || visual.visualType} — *${visual.pageName}*`);
+                    lines.push('');
+
+                    const lineage = this.lineageEngine.getVisualLineage(visual.pageName, visual.visualName);
+                    if (!lineage) { lines.push('*(no lineage resolved)*'); lines.push(''); continue; }
+
+                    // Fields used
+                    if (lineage.fields && lineage.fields.length > 0) {
+                        lines.push('**Fields:**');
+                        for (const f of lineage.fields) {
+                            const badge = f.type === 'measure' ? 'Measure' : f.type === 'column' ? 'Column' : 'Hierarchy';
+                            lines.push(`- \`[${badge}]\` \`${f.table || f.entity}\`[\`${f.name}\`]`);
+                        }
+                        lines.push('');
+                    }
+
+                    // Tables referenced
+                    if (lineage.tables && lineage.tables.length > 0) {
+                        lines.push('**Tables → Physical Source:**');
+                        for (const t of lineage.tables) {
+                            let row = `- **${t.name}**`;
+                            if (t.physicalSchema || t.physicalTable) {
+                                row += ` → \`${[t.physicalSchema, t.physicalTable].filter(Boolean).join('.')}\``;
+                            }
+                            if (t.renames && t.renames.length > 0) {
+                                row += ` (${t.renames.length} rename${t.renames.length !== 1 ? 's' : ''})`;
+                            }
+                            lines.push(row);
+
+                            // First M step
+                            if (this.mSteps) {
+                                const steps = this.mSteps.get(t.name);
+                                if (steps && steps.length > 0) {
+                                    const src = steps.find(s => s.kind === 'Source') || steps[0];
+                                    const preview = src.exprText.length > 100 ? src.exprText.slice(0, 100) + '…' : src.exprText;
+                                    lines.push(`  - First M step: **${src.name}** \`[${src.kind}]\` — \`${preview.replace(/`/g, "'")}\``);
+                                }
+                            }
+                        }
+                        lines.push('');
+                    }
+
+                    // Measures chain
+                    if (lineage.measures && lineage.measures.length > 0) {
+                        lines.push('**Measures:**');
+                        for (const m of lineage.measures) {
+                            lines.push(`- \`${m.table}\`[\`${m.name}\`]`);
+                        }
+                        lines.push('');
+                    }
+                }
+            }
+        }
+
+        // Broken References section
+        if (this.lineageEngine?.brokenRefs?.length > 0) {
+            lines.push('## Broken References');
+            lines.push('');
+            lines.push('> ⚠️ The following field references point to measures or columns that do not exist in the model. These may be stale references from renamed or deleted fields.');
+            lines.push('');
+            for (const ref of this.lineageEngine.brokenRefs) {
+                lines.push(`- Visual \`${ref.visual}\` → \`${ref.target}\` (not found)`);
+            }
+            lines.push('');
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // HTML
+    // ──────────────────────────────────────────────
+
+    generateHTML() {
+        const modelName = this.model.database?.name || this.model.model?.name || 'Semantic Model';
+        const visibleTables = this._getVisibleTables();
+        const totalMeasures = visibleTables.reduce((sum, t) => sum + t.measures.length, 0);
+        const totalColumns = visibleTables.reduce((sum, t) => sum + t.columns.length, 0);
+
+        let html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${this._escHtml(modelName)} — Documentation</title>
+<style>
+:root {
+    --primary: #1a3a5c;
+    --accent: #c89632;
+    --bg: #fafaf8;
+    --card-bg: #ffffff;
+    --border: #e0dcd4;
+    --text: #2c2c2c;
+    --text-secondary: #666;
+    --code-bg: #f5f2ed;
+    --measure-bg: #fff8e1;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 24px;
+}
+h1 { color: var(--primary); font-size: 28px; margin-bottom: 8px; }
+h2 {
+    color: var(--primary);
+    font-size: 22px;
+    margin: 40px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 3px solid var(--accent);
+}
+h3 { color: var(--primary); font-size: 18px; margin: 24px 0 12px; }
+h4 { color: var(--text); font-size: 15px; margin: 16px 0 8px; }
+h5 { color: var(--text-secondary); font-size: 14px; margin: 12px 0 6px; }
+.subtitle { color: var(--text-secondary); margin-bottom: 32px; font-size: 14px; }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 24px;
+    font-size: 14px;
+}
+th {
+    background: var(--primary);
+    color: white;
+    text-align: left;
+    padding: 10px 12px;
+    font-weight: 600;
+}
+td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+tr:nth-child(even) { background: #f8f6f2; }
+tr:hover { background: #f0ebe3; }
+.dax-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    padding: 12px 16px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 8px 0 16px;
+    border-radius: 4px;
+}
+.measure-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin: 12px 0;
+}
+.measure-card h5 {
+    margin: 0 0 8px;
+    color: var(--primary);
+    font-size: 15px;
+}
+.measure-meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+.measure-meta span { display: flex; align-items: center; gap: 4px; }
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+.badge-column { background: #e3f2fd; color: #1565c0; }
+.badge-measure { background: var(--measure-bg); color: #f57f17; }
+.badge-hidden { background: #fce4ec; color: #c62828; }
+.badge-active { background: #e8f5e9; color: #2e7d32; }
+.badge-inactive { background: #fce4ec; color: #c62828; }
+.badge-calc { background: #e8eaf6; color: #283593; }
+.badge-mode { background: #e3f0ff; color: #1a3a5c; }
+.badge-crossfilter { background: #fff3e0; color: #e65100; }
+.badge-dynamic { background: #f3e5f5; color: #6a1b9a; }
+.auto-date-note { font-size: 13px; color: #666; margin-bottom: 12px; }
+.ref-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 4px 0;
+}
+.ref-tag {
+    background: #e8eaf6;
+    color: #283593;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: monospace;
+}
+.visual-usage {
+    background: #f3e5f5;
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin: 4px 0;
+    font-size: 13px;
+}
+.visual-usage strong { color: #6a1b9a; }
+blockquote {
+    border-left: 4px solid var(--accent);
+    padding: 8px 16px;
+    margin: 8px 0;
+    background: #fffde7;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+.toc { columns: 2; margin: 0 0 32px; }
+.toc a {
+    color: var(--primary);
+    text-decoration: none;
+    display: block;
+    padding: 2px 0;
+}
+.toc a:hover { text-decoration: underline; }
+.overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+}
+.stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+}
+.stat-card .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--primary);
+}
+.stat-card .stat-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.rel-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 6px 0;
+    font-size: 14px;
+}
+.rel-arrow { color: var(--accent); font-weight: 700; font-size: 18px; }
+.footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 2px solid var(--border);
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.footer a { color: var(--primary); }
+/* DAX syntax highlighting */
+.dax-keyword { color: #0000ff; font-weight: 600; }
+.dax-function { color: #795548; }
+.dax-string { color: #b71c1c; }
+.dax-comment { color: #388e3c; font-style: italic; }
+.dax-number { color: #e65100; }
+.dax-ref { color: #1565c0; }
+@media print {
+    body { max-width: 100%; padding: 20px; }
+    h2 { page-break-before: always; }
+    .measure-card { page-break-inside: avoid; }
+}
+@media (max-width: 768px) {
+    .toc { columns: 1; }
+    .overview-grid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<h1>${this._escHtml(modelName)}</h1>
+<p class="subtitle">Documentation generated on ${new Date().toLocaleDateString()}</p>
+`;
+
+        // Overview
+        html += `<h2 id="model-overview">Model Overview</h2>
+<div class="overview-grid">
+    <div class="stat-card"><div class="stat-value">${this.model.tables.length}</div><div class="stat-label">Tables</div></div>
+    <div class="stat-card"><div class="stat-value">${totalColumns}</div><div class="stat-label">Columns</div></div>
+    <div class="stat-card"><div class="stat-value">${totalMeasures}</div><div class="stat-label">Measures</div></div>
+    <div class="stat-card"><div class="stat-value">${this.model.relationships.length}</div><div class="stat-label">Relationships</div></div>
+</div>
+<table>
+<tr><th>Property</th><th>Value</th></tr>`;
+
+        if (this.model.database?.name) html += `<tr><td>Database</td><td>${this._escHtml(this.model.database.name)}</td></tr>`;
+        if (this.model.database?.compatibilityLevel) html += `<tr><td>Compatibility Level</td><td>${this.model.database.compatibilityLevel}</td></tr>`;
+        if (this.model.model?.culture) html += `<tr><td>Culture</td><td>${this.model.model.culture}</td></tr>`;
+
+        html += `</table>`;
+
+        // Table of Contents
+        html += `<h2>Table of Contents</h2><div class="toc">`;
+        for (const table of this._getVisibleTables()) {
+            const anchor = this._anchor(table.name);
+            html += `<a href="#${anchor}">${this._escHtml(table.name)} (${table.columns.length} cols, ${table.measures.length} measures)</a>`;
+        }
+        html += `</div>`;
+
+        // Tables
+        html += `<h2 id="table-inventory">Table Inventory</h2>`;
+        const _htmlAutoDateCount = this._getAutoDateCount();
+        if (_htmlAutoDateCount > 0) html += `<p class="auto-date-note"><em>${_htmlAutoDateCount} auto-date/time table${_htmlAutoDateCount > 1 ? 's' : ''} hidden</em></p>`;
+
+        for (const table of this._getVisibleTables()) {
+            const tableMode = table.partitions.find(p => p.mode)?.mode
+                || (table.partitions.find(p => p.sourceType === 'calculated') ? 'Calculated' : 'Import');
+            html += `<h3 id="${this._anchor(table.name)}">${this._escHtml(table.name)}`;
+            if (table.isHidden) html += ` <span class="badge badge-hidden">Hidden</span>`;
+            html += ` <span class="badge badge-mode">${tableMode}</span>`;
+            html += `</h3>`;
+
+            if (table.description) {
+                html += `<blockquote>${this._escHtml(table.description)}</blockquote>`;
+            }
+
+            // Incremental Refresh Policy badge
+            if (table.refreshPolicy) {
+                const rp = table.refreshPolicy;
+                html += `<p><span class="badge" style="background:#e3f2fd;color:#1565c0">Incremental Refresh</span> `;
+                if (rp.rollingWindowPeriods != null) html += `rolling ${rp.rollingWindowPeriods} ${this._escHtml(rp.rollingWindowGranularity || '')}${rp.rollingWindowPeriods !== 1 ? 's' : ''} · `;
+                if (rp.incrementalPeriods != null) html += `incremental ${rp.incrementalPeriods} ${this._escHtml(rp.incrementalGranularity || '')}${rp.incrementalPeriods !== 1 ? 's' : ''}`;
+                html += `</p>`;
+            }
+
+            // Source connection inline
+            if (this.lineageEngine) {
+                const allSrc = this.lineageEngine.getAllDataSources();
+                for (const src of allSrc) {
+                    const sid = `source:${MExpressionParser._sourceKey(src)}`;
+                    const consumers = this.lineageEngine.getDataSourceConsumers(sid);
+                    const te = consumers.tables.find(t => t.name === table.name);
+                    if (!te) continue;
+                    const server = src.serverResolved || src.server || '';
+                    const db = src.databaseResolved || src.database || '';
+                    const physLabel = [te.physicalSchema, te.physicalTable].filter(Boolean).join('.');
+                    html += `<p class="table-source-inline"><span class="badge lineage-badge source">${this._escHtml(src.type)}</span>`;
+                    if (server) html += ` <code>${this._escHtml(server)}</code>`;
+                    if (db) html += ` / <code>${this._escHtml(db)}</code>`;
+                    if (src.url) html += ` <code>${this._escHtml(src.url)}</code>`;
+                    if (physLabel) html += ` ← <code>${this._escHtml(physLabel)}</code>`;
+                    if (src.parameterized) html += ` <span class="badge badge-field-param">Parameterized</span>`;
+                    if (src.gatewayRequired) html += ` <span class="badge" style="background:#ffebee;color:#c62828">Gateway Required</span>`;
+                    if (te.renames && te.renames.length > 0) {
+                        html += ` <details style="display:inline-block;margin-left:6px"><summary style="font-size:11px;cursor:pointer">${te.renames.length} rename${te.renames.length !== 1 ? 's' : ''}</summary><ul style="font-size:11px;margin:2px 0 0 12px">`;
+                        for (const r of te.renames) html += `<li><code>${this._escHtml(r.sourceName)}</code> → <code>${this._escHtml(r.modelName)}</code></li>`;
+                        html += `</ul></details>`;
+                    }
+                    html += `</p>`;
+                    break; // show first matching source only (primary source)
+                }
+            }
+
+            // Partitions (M queries) — parity with Markdown output
+            if (table.partitions.length > 0) {
+                for (const p of table.partitions) {
+                    if (!p.source) continue;
+                    html += `<details class="partition-details"><summary>Partition: ${this._escHtml(p.name)} · <code>${this._escHtml(p.mode || 'import')}</code></summary>
+<div class="dax-block" style="font-size:11px">${this._escHtml(p.source)}</div></details>`;
+                }
+            }
+
+            // Columns
+            if (table.columns.length > 0) {
+                html += `<h4>Columns (${table.columns.length})</h4>
+<table><tr><th>Column</th><th>Data Type</th><th>Sort By</th><th>Summarize</th><th>Description</th><th>Format</th><th>Status</th></tr>`;
+
+                for (const col of table.columns) {
+                    const calcBadge = col.expression ? ' <span class="badge badge-calc">Calc</span>' : '';
+                    html += `<tr>
+    <td>${this._escHtml(col.name)}${calcBadge}</td>
+    <td>${col.dataType || ''}</td>
+    <td>${this._escHtml(col.sortByColumn || '')}</td>
+    <td>${col.summarizeBy || ''}</td>
+    <td>${this._escHtml(col.description || '')}</td>
+    <td>${this._escHtml(col.formatString || '')}</td>
+    <td>${col.isHidden ? '<span class="badge badge-hidden">Hidden</span>' : ''}</td>
+</tr>`;
+                }
+                html += `</table>`;
+            }
+
+            // Measures
+            if (table.measures.length > 0) {
+                html += `<h4>Measures (${table.measures.length})</h4>`;
+
+                for (const measure of table.measures) {
+                    html += `<div class="measure-card">
+    <h5>${this._escHtml(measure.name)}</h5>`;
+
+                    if (measure.description) {
+                        html += `<blockquote>${this._escHtml(measure.description)}</blockquote>`;
+                    }
+
+                    html += `<div class="measure-meta">`;
+                    if (measure.displayFolder) html += `<span>📁 ${this._escHtml(measure.displayFolder)}</span>`;
+                    if (measure.formatString) html += `<span>📐 ${this._escHtml(measure.formatString)}</span>`;
+                    html += `</div>`;
+
+                    if (measure.expression) {
+                        html += `<div class="dax-block">${this._highlightDAX(measure.expression)}</div>`;
+                    }
+
+                    // References
+                    const refs = this.measureRefs[measure.name];
+                    if (refs) {
+                        if (refs.columnRefs.length > 0) {
+                            html += `<div class="ref-list"><strong>Columns:&nbsp;</strong>`;
+                            for (const r of refs.columnRefs) {
+                                html += `<span class="ref-tag">${this._escHtml(r.table)}[${this._escHtml(r.column)}]</span>`;
+                            }
+                            html += `</div>`;
+                        }
+                        if (refs.measureRefs.length > 0) {
+                            html += `<div class="ref-list"><strong>Measures:&nbsp;</strong>`;
+                            for (const r of refs.measureRefs) {
+                                html += `<span class="ref-tag badge-measure">[${this._escHtml(r)}]</span>`;
+                            }
+                            html += `</div>`;
+                        }
+                    }
+
+                    // Visual usage
+                    const usageKey = `measure|${table.name}|${measure.name}`;
+                    const usage = this.visualUsage[usageKey];
+                    if (usage && usage.length > 0) {
+                        html += `<div class="visual-usage"><strong>Used in:</strong> `;
+                        const byPage = this._groupByPage(usage);
+                        const parts = [];
+                        for (const [page, visuals] of Object.entries(byPage)) {
+                            parts.push(`<em>${this._escHtml(page)}</em>: ${visuals.map(v => this._escHtml(v.visualName)).join(', ')}`);
+                        }
+                        html += parts.join(' | ');
+                        html += `</div>`;
+                    }
+
+                    html += `</div>`;
+                }
+            }
+        }
+
+        // Measure Catalog
+        html += `<h2 id="measure-catalog">Measure Catalog</h2>
+<table><tr><th>#</th><th>Measure</th><th>Table</th><th>Display Folder</th><th>Format</th><th>Description</th></tr>`;
+
+        let num = 0;
+        for (const table of this._getVisibleTables()) {
+            for (const m of table.measures) {
+                num++;
+                html += `<tr>
+    <td>${num}</td>
+    <td>${this._escHtml(m.name)}</td>
+    <td>${this._escHtml(table.name)}</td>
+    <td>${this._escHtml(m.displayFolder || '')}</td>
+    <td>${this._escHtml(m.formatString || '')}</td>
+    <td>${this._escHtml(m.description || '')}</td>
+</tr>`;
+            }
+        }
+        html += `</table>`;
+
+        // Relationships
+        html += `<h2 id="relationships">Relationships</h2>`;
+
+        if (this.model.relationships.length > 0) {
+            for (const r of this.model.relationships) {
+                const statusBadge = r.isActive
+                    ? '<span class="badge badge-active">Active</span>'
+                    : '<span class="badge badge-inactive">Inactive</span>';
+                const crossFilter = r.crossFilteringBehavior === 'bothDirections' ? 'Both'
+                    : r.crossFilteringBehavior === 'oneDirection' ? 'Single'
+                    : r.crossFilteringBehavior ? r.crossFilteringBehavior : 'Single';
+                html += `<div class="rel-card">
+    <span>${this._escHtml(r.fromTable)}[${this._escHtml(r.fromColumn)}]</span>
+    <span class="rel-arrow">→</span>
+    <span>${this._escHtml(r.toTable)}[${this._escHtml(r.toColumn)}]</span>
+    <span class="badge">${this._formatCardinality(r)}</span>
+    <span class="badge badge-crossfilter">${crossFilter}</span>
+    ${statusBadge}
+</div>`;
+            }
+        } else {
+            html += `<p><em>No relationships defined.</em></p>`;
+        }
+
+        // Roles
+        if (this.model.roles.length > 0) {
+            html += `<h2 id="roles">Roles</h2>`;
+
+            for (const role of this.model.roles) {
+                html += `<h3>${this._escHtml(role.name)}</h3>`;
+                if (role.modelPermission) {
+                    html += `<p><strong>Permission:</strong> ${role.modelPermission}</p>`;
+                }
+                if (role.tablePermissions.length > 0) {
+                    html += `<table><tr><th>Table</th><th>Filter Expression</th></tr>`;
+                    for (const tp of role.tablePermissions) {
+                        html += `<tr><td>${this._escHtml(tp.table)}</td><td><code>${this._escHtml(tp.filterExpression || '')}</code></td></tr>`;
+                    }
+                    html += `</table>`;
+                }
+            }
+        }
+
+        // Expressions
+        if (this.model.expressions.length > 0) {
+            html += `<h2 id="expressions">Expressions</h2>`;
+            for (const expr of this.model.expressions) {
+                html += `<h3>${this._escHtml(expr.name)}</h3>`;
+                if (expr.kind) html += `<p><strong>Kind:</strong> ${expr.kind}</p>`;
+                if (expr.expression) {
+                    html += `<div class="dax-block">${this._escHtml(expr.expression)}</div>`;
+                }
+            }
+        }
+
+        // Dynamic Features (HTML)
+        html += this._buildHTMLDynamicFeatures();
+
+        // Footer — styled card
+        html += `<div class="footer" style="margin-top:40px;padding:20px 24px;background:#f9f9f9;border:1px solid #e0e0e0;border-left:4px solid #86BC25;border-radius:2px;font-family:sans-serif;">
+    <p style="margin:0 0 8px;font-weight:700;color:#111111;">Generated with <a href="https://bredeespelid.github.io/PBIP_SemLin/" target="_blank" style="color:#000;text-decoration:underline;">PBIP SemLin</a> — a tool for Power BI documentation.</p>
+    <p style="margin:0;font-size:13px;color:#666;">Hosted at <a href="https://github.com/bredeespelid/PBIP_SemLin" target="_blank" style="color:#666;text-decoration:underline;">github.com/bredeespelid/PBIP_SemLin</a></p>
+</div>
+</body>
+</html>`;
+
+        return html;
+    }
+
+    // ──────────────────────────────────────────────
+    // FULL REPORT (comprehensive HTML)
+    // ──────────────────────────────────────────────
+
+    generateFullReport(visualData, diagramRenderer, scope = 'all') {
+        const modelName = this.model.database?.name || this.model.model?.name || 'Semantic Model';
+        const totalMeasures = this.model.tables.reduce((sum, t) => sum + t.measures.length, 0);
+        const totalColumns = this.model.tables.reduce((sum, t) => sum + t.columns.length, 0);
+
+        // Get relationship diagram SVG
+        let relDiagramSVG = '';
+        if (diagramRenderer) {
+            relDiagramSVG = diagramRenderer.exportSVG() || '';
+        }
+
+        let html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${this._escHtml(modelName)} — Full Report</title>
+<style>
+:root {
+    --primary: #1a3a5c;
+    --accent: #c89632;
+    --bg: #fafaf8;
+    --card-bg: #ffffff;
+    --border: #e0dcd4;
+    --text: #2c2c2c;
+    --text-secondary: #666;
+    --code-bg: #f5f2ed;
+    --measure-bg: #fff8e1;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 24px;
+}
+h1 { color: var(--primary); font-size: 28px; margin-bottom: 8px; }
+h2 {
+    color: var(--primary);
+    font-size: 22px;
+    margin: 40px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 3px solid var(--accent);
+}
+h3 { color: var(--primary); font-size: 18px; margin: 24px 0 12px; }
+h4 { color: var(--text); font-size: 15px; margin: 16px 0 8px; }
+h5 { color: var(--text-secondary); font-size: 14px; margin: 12px 0 6px; }
+.subtitle { color: var(--text-secondary); margin-bottom: 32px; font-size: 14px; }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 24px;
+    font-size: 14px;
+}
+th {
+    background: var(--primary);
+    color: white;
+    text-align: left;
+    padding: 10px 12px;
+    font-weight: 600;
+}
+td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+tr:nth-child(even) { background: #f8f6f2; }
+tr:hover { background: #f0ebe3; }
+.dax-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    padding: 12px 16px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 8px 0 16px;
+    border-radius: 4px;
+}
+.measure-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin: 12px 0;
+}
+.measure-card h5 {
+    margin: 0 0 8px;
+    color: var(--primary);
+    font-size: 15px;
+}
+.measure-meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+.badge-column { background: #e3f2fd; color: #1565c0; }
+.badge-measure { background: var(--measure-bg); color: #f57f17; }
+.badge-hidden { background: #fce4ec; color: #c62828; }
+.badge-active { background: #e8f5e9; color: #2e7d32; }
+.badge-inactive { background: #fce4ec; color: #c62828; }
+.badge-calc { background: #e8eaf6; color: #283593; }
+.badge-mode { background: #e3f0ff; color: #1a3a5c; }
+.badge-crossfilter { background: #fff3e0; color: #e65100; }
+.badge-dynamic { background: #f3e5f5; color: #6a1b9a; }
+.auto-date-note { font-size: 13px; color: #666; margin-bottom: 12px; }
+.badge-visual-type {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #f3e5f5;
+    color: #6a1b9a;
+}
+.ref-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 4px 0;
+}
+.ref-tag {
+    background: #e8eaf6;
+    color: #283593;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: monospace;
+}
+.visual-usage {
+    background: #f3e5f5;
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin: 4px 0;
+    font-size: 13px;
+}
+.visual-usage strong { color: #6a1b9a; }
+blockquote {
+    border-left: 4px solid var(--accent);
+    padding: 8px 16px;
+    margin: 8px 0;
+    background: #fffde7;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+.toc { columns: 2; margin: 0 0 32px; }
+.toc a {
+    color: var(--primary);
+    text-decoration: none;
+    display: block;
+    padding: 2px 0;
+}
+.toc a:hover { text-decoration: underline; }
+.overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+}
+.stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+}
+.stat-card .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--primary);
+}
+.stat-card .stat-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.rel-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 6px 0;
+    font-size: 14px;
+}
+.rel-arrow { color: var(--accent); font-weight: 700; font-size: 18px; }
+.page-layout-section {
+    background: #f8f8f8;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px 0;
+}
+.page-layout-section svg { max-width: 100%; height: auto; }
+.visual-card-report {
+    background: var(--card-bg);
+    border: 1px solid #ce93d8;
+    border-left: 4px solid #9c27b0;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 8px 0;
+}
+.visual-card-report h5 { color: var(--primary); margin: 0 0 6px; }
+.field-chip-report {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    margin: 1px;
+}
+.field-chip-report.values { background: #fff8e1; color: #f57f17; }
+.field-chip-report.category { background: #e3f2fd; color: #1565c0; }
+.field-chip-report.series { background: #e8f5e9; color: #2e7d32; }
+.field-chip-report.filters { background: #fce4ec; color: #c62828; }
+.field-chip-report.other { background: #f5f5f5; color: var(--text-secondary); }
+.footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 2px solid var(--border);
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.footer a { color: var(--primary); }
+.dax-keyword { color: #0000ff; font-weight: 600; }
+.dax-function { color: #795548; }
+.dax-string { color: #b71c1c; }
+.dax-comment { color: #388e3c; font-style: italic; }
+.dax-number { color: #e65100; }
+.dax-ref { color: #1565c0; }
+details {
+    margin: 8px 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+details summary {
+    cursor: pointer;
+    padding: 10px 16px;
+    background: #f8f6f2;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--primary);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+details summary::-webkit-details-marker { display: none; }
+details summary::before {
+    content: '\\25B6';
+    font-size: 10px;
+    transition: transform 0.2s;
+    flex-shrink: 0;
+}
+details[open] summary::before {
+    transform: rotate(90deg);
+}
+details summary:hover {
+    background: #f0ebe3;
+}
+details > .details-content {
+    padding: 12px 16px;
+}
+.badge-calc { background: #e8f5e9; color: #2e7d32; }
+.badge-field-param { background: #e3f2fd; color: #1565c0; }
+@media print {
+    body { max-width: 100%; padding: 20px; }
+    h2 { page-break-before: always; }
+    .measure-card, .visual-card-report { page-break-inside: avoid; }
+    details { border: none; }
+    details[open] > .details-content { padding: 0; }
+}
+@media (max-width: 768px) {
+    .toc { columns: 1; }
+    .overview-grid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<h1>${this._escHtml(modelName)} \u2014 ${scope === 'model' ? 'Model Documentation' : scope === 'visuals' ? 'Visual Documentation' : 'Full Report'}</h1>
+<p class="subtitle">Comprehensive documentation generated on ${new Date().toLocaleDateString()}</p>
+`;
+
+        // Table of Contents
+        html += `<h2>Table of Contents</h2><div class="toc">
+<a href="#model-overview">Model Overview</a>`;
+        if (scope !== 'visuals' && relDiagramSVG) html += `<a href="#relationship-diagram">Relationship Diagram</a>`;
+        if (scope !== 'visuals') {
+            html += `<a href="#table-inventory">Table Inventory</a>`;
+            for (const table of this._getVisibleTables()) {
+                html += `<a href="#${this._anchor(table.name)}">&nbsp;&nbsp;${this._escHtml(table.name)}</a>`;
+            }
+            html += `<a href="#measure-catalog">Measure Catalog</a>
+<a href="#relationships">Relationships</a>`;
+            if (this.model.roles.length > 0) html += `<a href="#roles">Roles</a>`;
+            if (this.model.expressions.length > 0) html += `<a href="#expressions">Expressions</a>`;
+        }
+        if (scope !== 'model' && visualData && visualData.pages.length > 0) {
+            html += `<a href="#report-pages">Report Pages &amp; Visual Layout</a>`;
+            for (const page of visualData.pages) {
+                html += `<a href="#page-${this._anchor(page.displayName)}">&nbsp;&nbsp;${this._escHtml(page.displayName)}</a>`;
+            }
+        }
+        if (scope !== 'model' && Object.keys(this.visualUsage).length > 0) html += `<a href="#visual-usage">Visual Usage</a>`;
+        html += `</div>`;
+
+        // Model Overview
+        html += `<h2 id="model-overview">Model Overview</h2>
+<div class="overview-grid">
+    <div class="stat-card"><div class="stat-value">${this.model.tables.length}</div><div class="stat-label">Tables</div></div>
+    <div class="stat-card"><div class="stat-value">${totalColumns}</div><div class="stat-label">Columns</div></div>
+    <div class="stat-card"><div class="stat-value">${totalMeasures}</div><div class="stat-label">Measures</div></div>
+    <div class="stat-card"><div class="stat-value">${this.model.relationships.length}</div><div class="stat-label">Relationships</div></div>`;
+        if (visualData) {
+            html += `<div class="stat-card"><div class="stat-value">${visualData.pages.length}</div><div class="stat-label">Pages</div></div>
+    <div class="stat-card"><div class="stat-value">${visualData.visuals.length}</div><div class="stat-label">Visuals</div></div>`;
+        }
+        html += `</div>
+<table>
+<tr><th>Property</th><th>Value</th></tr>`;
+        if (this.model.database?.name) html += `<tr><td>Database</td><td>${this._escHtml(this.model.database.name)}</td></tr>`;
+        if (this.model.database?.compatibilityLevel) html += `<tr><td>Compatibility Level</td><td>${this.model.database.compatibilityLevel}</td></tr>`;
+        if (this.model.model?.culture) html += `<tr><td>Culture</td><td>${this.model.model.culture}</td></tr>`;
+        html += `</table>`;
+
+        if (scope !== 'visuals') {
+
+        // Relationship Diagram (embedded SVG)
+        if (relDiagramSVG) {
+            html += `<h2 id="relationship-diagram">Relationship Diagram</h2>
+<div style="overflow-x:auto;margin:16px 0">${relDiagramSVG}</div>`;
+        }
+
+        // Table Inventory (same as regular HTML export)
+        html += `<h2 id="table-inventory">Table Inventory</h2>`;
+        const _frAutoDateCount = this._getAutoDateCount();
+        if (_frAutoDateCount > 0) html += `<p class="auto-date-note"><em>${_frAutoDateCount} auto-date/time table${_frAutoDateCount > 1 ? 's' : ''} hidden</em></p>`;
+
+        for (const table of this._getVisibleTables()) {
+            html += `<h3 id="${this._anchor(table.name)}">${this._escHtml(table.name)}`;
+            if (table.isHidden) html += ` <span class="badge badge-hidden">Hidden</span>`;
+            html += `</h3>`;
+
+            if (table.description) {
+                html += `<blockquote>${this._escHtml(table.description)}</blockquote>`;
+            }
+
+            // Field parameter detection
+            const fpItems = this._getFieldParameterItems(table.name);
+            if (fpItems !== null) {
+                html += `<p style="margin:8px 0"><span class="badge badge-field-param">Field Parameter</span> This table is a dynamic field selector.</p>`;
+                if (fpItems.length > 0) {
+                    html += `<div style="margin:8px 0;padding:8px 12px;background:#e3f2fd;border-radius:4px;font-size:13px"><strong>Available fields (${fpItems.length}):</strong><br>`;
+                    for (const item of fpItems) {
+                        html += `<span style="display:inline-block;background:#fff;border:1px solid #bbdefb;border-radius:3px;padding:1px 6px;margin:2px;font-family:monospace;font-size:12px">'${this._escHtml(item.table)}'[${this._escHtml(item.column)}]</span>`;
+                    }
+                    html += `</div>`;
+                }
+            }
+
+            // Calculation Group
+            if (table.calculationGroup && table.calculationGroup.items.length > 0) {
+                const cgPrec2 = table.calculationGroup.precedence != null ? ` — precedence: ${table.calculationGroup.precedence}` : '';
+                html += `<h4>Calculation Group <span class="badge badge-calc">Calc Group</span>${cgPrec2}</h4>
+<p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">${table.calculationGroup.items.length} calculation item(s)</p>`;
+                const sortedCgItems2 = [...table.calculationGroup.items]
+                    .sort((a, b) => (a.ordinal ?? 999) - (b.ordinal ?? 999));
+                for (const item of sortedCgItems2) {
+                    const usesSM2 = /\bSELECTEDMEASURE\s*\(/i.test(item.expression || '');
+                    const ordinalBadge = item.ordinal != null ? ` <span class="badge">#${item.ordinal}</span>` : '';
+                    const dynamicBadge = usesSM2 ? ` <span class="badge badge-dynamic">Dynamic</span>` : '';
+                    html += `<div class="measure-card">
+    <h5>${this._escHtml(item.name)} <span class="badge badge-calc">Calc Item</span>${ordinalBadge}${dynamicBadge}</h5>`;
+                    if (item.expression) {
+                        html += `<details><summary>Expression</summary><div class="details-content">
+<div class="dax-block">${this._highlightDAX(item.expression)}</div>
+</div></details>`;
+                    }
+                    html += `</div>`;
+                }
+            }
+
+            if (table.columns.length > 0) {
+                if (table.columns.length > 5) {
+                    html += `<details><summary>Columns (${table.columns.length})</summary><div class="details-content">`;
+                } else {
+                    html += `<h4>Columns (${table.columns.length})</h4>`;
+                }
+                html += `<table><tr><th>Column</th><th>Data Type</th><th>Sort By</th><th>Summarize</th><th>Description</th><th>Format</th><th>Status</th></tr>`;
+                for (const col of table.columns) {
+                    const calcBadge = col.expression ? ' <span class="badge badge-calc">Calc</span>' : '';
+                    html += `<tr>
+    <td>${this._escHtml(col.name)}${calcBadge}</td>
+    <td>${col.dataType || ''}</td>
+    <td>${this._escHtml(col.sortByColumn || '')}</td>
+    <td>${col.summarizeBy || ''}</td>
+    <td>${this._escHtml(col.description || '')}</td>
+    <td>${this._escHtml(col.formatString || '')}</td>
+    <td>${col.isHidden ? '<span class="badge badge-hidden">Hidden</span>' : ''}</td>
+</tr>`;
+                }
+                html += `</table>`;
+
+                // Column Where Used — data engineer perspective
+                if (this.lineageEngine) {
+                    const usedCols = [];
+                    for (const col of table.columns) {
+                        if (col.isHidden) continue;
+                        const consumers = this.lineageEngine.getColumnConsumers(table.name, col.name);
+                        if (consumers.measures.length === 0 && consumers.directVisuals.length === 0) continue;
+                        usedCols.push({ col, consumers });
+                    }
+                    if (usedCols.length > 0) {
+                        html += `<details style="margin-top:8px"><summary style="font-size:13px;font-weight:600;cursor:pointer;color:var(--primary,#1a3a5c)">Column Usage — Where Used (${usedCols.length} columns)</summary><div class="details-content">
+<p style="font-size:12px;color:var(--text-secondary,#666);margin:6px 0">Data engineer view: which measures and visuals consume each column in this table.</p>
+<table><tr><th>Column</th><th>Referenced by Measures</th><th>Used in Visuals</th></tr>`;
+                        for (const { col, consumers } of usedCols) {
+                            const measuresHtml = consumers.measures.map(m =>
+                                `<span style="display:inline-block;background:#fff8e1;border:1px solid #ffe082;border-radius:2px;padding:1px 5px;font-family:monospace;font-size:11px;margin:1px">[${this._escHtml(m.name)}]</span>`
+                            ).join(' ');
+                            const visualsHtml = consumers.directVisuals.slice(0, 5).map(v =>
+                                `<span style="font-size:11px;color:#555">${this._escHtml(v.page)}: ${this._escHtml(v.name)}</span>`
+                            ).join('<br>') + (consumers.directVisuals.length > 5 ? `<br><span style="font-size:11px;color:#888">+${consumers.directVisuals.length - 5} more</span>` : '');
+                            html += `<tr><td style="font-weight:500">${this._escHtml(col.name)}</td><td>${measuresHtml || '<span style="color:#aaa;font-size:11px">—</span>'}</td><td>${visualsHtml || '<span style="color:#aaa;font-size:11px">—</span>'}</td></tr>`;
+                        }
+                        html += `</table></div></details>`;
+                    }
+                }
+
+                if (table.columns.length > 5) {
+                    html += `</div></details>`;
+                }
+            }
+
+            if (table.measures.length > 0) {
+                html += `<h4>Measures (${table.measures.length})</h4>`;
+                for (const measure of table.measures) {
+                    html += `<div class="measure-card">
+    <h5>${this._escHtml(measure.name)}</h5>`;
+                    if (measure.description) html += `<blockquote>${this._escHtml(measure.description)}</blockquote>`;
+                    html += `<div class="measure-meta">`;
+                    if (measure.displayFolder) html += `<span>Folder: ${this._escHtml(measure.displayFolder)}</span>`;
+                    if (measure.formatString) html += `<span>Format: ${this._escHtml(measure.formatString)}</span>`;
+                    html += `</div>`;
+                    if (measure.expression) {
+                        html += `<details><summary>DAX Expression</summary><div class="details-content">
+<div class="dax-block">${this._highlightDAX(measure.expression)}</div>
+</div></details>`;
+                    }
+                    const refs = this.measureRefs[measure.name];
+                    if (refs) {
+                        if (refs.columnRefs.length > 0) {
+                            html += `<div class="ref-list"><strong>Columns:&nbsp;</strong>`;
+                            for (const r of refs.columnRefs) html += `<span class="ref-tag">${this._escHtml(r.table)}[${this._escHtml(r.column)}]</span>`;
+                            html += `</div>`;
+                        }
+                        if (refs.measureRefs.length > 0) {
+                            html += `<div class="ref-list"><strong>Measures:&nbsp;</strong>`;
+                            for (const r of refs.measureRefs) html += `<span class="ref-tag badge-measure">[${this._escHtml(r)}]</span>`;
+                            html += `</div>`;
+                        }
+                    }
+                    const usageKey = `measure|${table.name}|${measure.name}`;
+                    const usage = this.visualUsage[usageKey];
+                    if (usage && usage.length > 0) {
+                        html += `<div class="visual-usage"><strong>Used in:</strong> `;
+                        const byPage = this._groupByPage(usage);
+                        const parts = [];
+                        for (const [page, visuals] of Object.entries(byPage)) {
+                            parts.push(`<em>${this._escHtml(page)}</em>: ${visuals.map(v => this._escHtml(v.visualName)).join(', ')}`);
+                        }
+                        html += parts.join(' | ') + `</div>`;
+                    }
+                    html += `</div>`;
+                }
+            }
+        }
+
+        // Measure Catalog
+        html += `<h2 id="measure-catalog">Measure Catalog</h2>
+<table><tr><th>#</th><th>Measure</th><th>Table</th><th>Display Folder</th><th>Format</th><th>Description</th></tr>`;
+        let num = 0;
+        for (const table of this._getVisibleTables()) {
+            for (const m of table.measures) {
+                num++;
+                html += `<tr><td>${num}</td><td>${this._escHtml(m.name)}</td><td>${this._escHtml(table.name)}</td><td>${this._escHtml(m.displayFolder || '')}</td><td>${this._escHtml(m.formatString || '')}</td><td>${this._escHtml(m.description || '')}</td></tr>`;
+            }
+        }
+        html += `</table>`;
+
+        // Relationships
+        html += `<h2 id="relationships">Relationships</h2>`;
+        if (this.model.relationships.length > 0) {
+            for (const r of this.model.relationships) {
+                const statusBadge = r.isActive
+                    ? '<span class="badge badge-active">Active</span>'
+                    : '<span class="badge badge-inactive">Inactive</span>';
+                const crossFilter2 = r.crossFilteringBehavior === 'bothDirections' ? 'Both'
+                    : r.crossFilteringBehavior === 'oneDirection' ? 'Single'
+                    : r.crossFilteringBehavior ? r.crossFilteringBehavior : 'Single';
+                html += `<div class="rel-card">
+    <span>${this._escHtml(r.fromTable)}[${this._escHtml(r.fromColumn)}]</span>
+    <span class="rel-arrow">&rarr;</span>
+    <span>${this._escHtml(r.toTable)}[${this._escHtml(r.toColumn)}]</span>
+    <span class="badge">${this._formatCardinality(r)}</span>
+    <span class="badge badge-crossfilter">${crossFilter2}</span>
+    ${statusBadge}
+</div>`;
+            }
+        } else {
+            html += `<p><em>No relationships defined.</em></p>`;
+        }
+
+        // Roles
+        if (this.model.roles.length > 0) {
+            html += `<h2 id="roles">Roles</h2>`;
+            for (const role of this.model.roles) {
+                html += `<h3>${this._escHtml(role.name)}</h3>`;
+                if (role.modelPermission) html += `<p><strong>Permission:</strong> ${role.modelPermission}</p>`;
+                if (role.tablePermissions.length > 0) {
+                    html += `<table><tr><th>Table</th><th>Filter Expression</th></tr>`;
+                    for (const tp of role.tablePermissions) {
+                        html += `<tr><td>${this._escHtml(tp.table)}</td><td><code>${this._escHtml(tp.filterExpression || '')}</code></td></tr>`;
+                    }
+                    html += `</table>`;
+                }
+            }
+        }
+
+        // Expressions
+        if (this.model.expressions.length > 0) {
+            html += `<h2 id="expressions">Expressions</h2>`;
+            for (const expr of this.model.expressions) {
+                html += `<h3>${this._escHtml(expr.name)}</h3>`;
+                if (expr.kind) html += `<p><strong>Kind:</strong> ${expr.kind}</p>`;
+                if (expr.expression) html += `<div class="dax-block">${this._escHtml(expr.expression)}</div>`;
+            }
+        }
+
+        } // end: scope !== 'visuals'
+
+        // Report Pages with Layout Diagrams
+        if (scope !== 'model' && visualData && visualData.pages.length > 0) {
+            html += `<h2 id="report-pages">Report Pages &amp; Visual Layout</h2>`;
+
+            for (const page of visualData.pages) {
+                html += `<h3 id="page-${this._anchor(page.displayName)}">${this._escHtml(page.displayName)} <span style="font-weight:400;font-size:14px;color:var(--text-secondary)">(${page.visuals.length} visuals)</span></h3>`;
+
+                // Page layout diagram
+                const visualsWithPos = page.visuals.filter(v => v.position && v.position.x != null);
+                if (visualsWithPos.length > 0) {
+                    const pw = page.pageWidth || 1280;
+                    const ph = page.pageHeight || 720;
+                    const scale = Math.min(600 / pw, 1);
+                    const svgW = Math.round(pw * scale);
+                    const svgH = Math.round(ph * scale);
+
+                    const typeColors = {
+                        pivotTable: '#1565c0', table: '#1565c0', matrix: '#1565c0',
+                        barChart: '#f57f17', columnChart: '#f57f17', clusteredBarChart: '#f57f17',
+                        clusteredColumnChart: '#f57f17', stackedBarChart: '#f57f17', stackedColumnChart: '#f57f17',
+                        lineChart: '#2e7d32', areaChart: '#2e7d32', lineClusteredColumnComboChart: '#2e7d32',
+                        pieChart: '#c62828', donutChart: '#c62828',
+                        card: '#6a1b9a', multiRowCard: '#6a1b9a',
+                        slicer: '#00695c', map: '#283593', filledMap: '#283593'
+                    };
+
+                    let rects = '';
+                    for (const v of visualsWithPos) {
+                        const p = v.position;
+                        const x = Math.round(p.x * scale);
+                        const y = Math.round(p.y * scale);
+                        const w = Math.round((p.width || 100) * scale);
+                        const h = Math.round((p.height || 60) * scale);
+                        const color = typeColors[v.visualType] || '#757575';
+                        const maxChars = Math.max(3, Math.floor(w / 7));
+                        const label = (v.visualName || v.visualType || '').substring(0, maxChars);
+
+                        rects += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2" fill="${color}" fill-opacity="0.12" stroke="${color}" stroke-width="1"/>
+<text x="${x + w / 2}" y="${y + h / 2 + 3}" text-anchor="middle" font-size="9" font-family="Segoe UI, sans-serif" fill="${color}">${this._escHtml(label)}</text>`;
+                    }
+
+                    html += `<div class="page-layout-section">
+<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">
+<rect width="${svgW}" height="${svgH}" fill="#f8f8f8" stroke="#ddd" stroke-width="1" rx="2"/>
+${rects}
+</svg>
+</div>`;
+                }
+
+                // Visual details (collapsible)
+                if (page.visuals.length > 0) {
+                    html += `<details><summary>${page.visuals.length} Visual${page.visuals.length !== 1 ? 's' : ''} — click to expand details</summary><div class="details-content">`;
+                    for (const visual of page.visuals) {
+                        const vName = visual.visualName || visual.visualType || 'Visual';
+                        html += `<div class="visual-card-report">
+<h5>${this._escHtml(vName)} <span class="badge-visual-type">${this._escHtml(visual.visualType || 'unknown')}</span></h5>`;
+
+                        if (visual.fields && visual.fields.length > 0) {
+                            const roleGroups = {};
+                            const fpTablesSeen = new Set();
+                            const cgTablesSeen = new Set();
+                            for (const f of visual.fields) {
+                                const role = this._normalizeRoleForReport(f.projectionName);
+                                if (!roleGroups[role]) roleGroups[role] = [];
+                                roleGroups[role].push(f);
+                            }
+                            for (const [role, fields] of Object.entries(roleGroups)) {
+                                const cssClass = role.toLowerCase().replace(/\s+/g, '');
+                                html += `<div style="margin:3px 0"><strong style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">${this._escHtml(role)}:</strong> `;
+                                for (const f of fields) {
+                                    const t = f.table || f.entity || '';
+                                    const n = f.name || f.column || f.hierarchy || '';
+                                    html += `<span class="field-chip-report ${cssClass}">${this._escHtml(t)}[${this._escHtml(n)}]</span>`;
+                                    const fpItems = this._getFieldParameterItems(t);
+                                    if (fpItems !== null) {
+                                        html += ` <span class="badge" style="background:#e3f2fd;color:#1565c0;font-size:10px">Field Param&thinsp;(${fpItems.length})</span>`;
+                                        fpTablesSeen.add(t);
+                                    } else {
+                                        const cgItems = this._getCalculationGroupItems(t);
+                                        if (cgItems !== null) {
+                                            html += ` <span class="badge" style="background:#e8f5e9;color:#2e7d32;font-size:10px">Calc Group&thinsp;(${cgItems.length})</span>`;
+                                            cgTablesSeen.add(t);
+                                        }
+                                    }
+                                    html += ' ';
+                                }
+                                html += `</div>`;
+                            }
+
+                            // Field parameter detail blocks
+                            for (const tbl of fpTablesSeen) {
+                                const fpItems = this._getFieldParameterItems(tbl);
+                                if (fpItems && fpItems.length > 0) {
+                                    html += `<div style="margin:6px 0;padding:6px 10px;background:#e3f2fd;border-left:3px solid #1565c0;border-radius:4px;font-size:12px">
+<strong>Field Parameter: '${this._escHtml(tbl)}'</strong> — ${fpItems.length} available field${fpItems.length !== 1 ? 's' : ''}:<br>`;
+                                    for (const item of fpItems) {
+                                        html += `<span style="display:inline-block;background:#fff;border:1px solid #bbdefb;border-radius:3px;padding:1px 6px;margin:2px;font-family:monospace;font-size:11px">'${this._escHtml(item.table)}'[${this._escHtml(item.column)}]</span>`;
+                                    }
+                                    html += `</div>`;
+                                }
+                            }
+
+                            // Calculation group detail blocks
+                            for (const tbl of cgTablesSeen) {
+                                const cgItems = this._getCalculationGroupItems(tbl);
+                                if (cgItems && cgItems.length > 0) {
+                                    html += `<div style="margin:6px 0;padding:6px 10px;background:#e8f5e9;border-left:3px solid #2e7d32;border-radius:4px;font-size:12px">
+<strong>Calculation Group: '${this._escHtml(tbl)}'</strong> — ${cgItems.length} item${cgItems.length !== 1 ? 's' : ''}:`;
+                                    for (const item of cgItems) {
+                                        html += `<div style="margin:4px 0"><span style="display:inline-block;background:#fff;border:1px solid #c8e6c9;border-radius:3px;padding:1px 6px;font-family:monospace;font-size:11px">${this._escHtml(item.name)}</span>`;
+                                        if (item.expression) {
+                                            html += `<details style="margin-top:2px"><summary style="font-size:11px;color:#555;cursor:pointer">Expression</summary>
+<div class="dax-block" style="margin:4px 0;font-size:11px">${this._highlightDAX(item.expression)}</div></details>`;
+                                        }
+                                        html += `</div>`;
+                                    }
+                                    html += `</div>`;
+                                }
+                            }
+                        } else {
+                            html += `<p style="font-size:12px;color:var(--text-secondary);font-style:italic">No data fields</p>`;
+                        }
+
+                        if (visual.position && visual.position.x != null) {
+                            html += `<p style="font-size:11px;color:var(--text-secondary);margin-top:4px">Position: x:${visual.position.x}, y:${visual.position.y}, ${visual.position.width || '?'}x${visual.position.height || '?'}</p>`;
+                        }
+
+                        html += `</div>`;
+                    }
+                    html += `</div></details>`;
+                }
+            }
+        }
+
+        // Visual Usage Summary
+        if (scope !== 'model' && Object.keys(this.visualUsage).length > 0) {
+            html += `<h2 id="visual-usage">Visual Usage Summary</h2>
+<table><tr><th>Field</th><th>Type</th><th>Table</th><th>Used In</th></tr>`;
+            for (const [key, usages] of Object.entries(this.visualUsage)) {
+                const [type, table, field] = key.split('|');
+                const visualList = usages.map(u => `${this._escHtml(u.pageName)}: ${this._escHtml(u.visualName)}`).join('; ');
+                html += `<tr><td>${this._escHtml(field)}</td><td>${type}</td><td>${this._escHtml(table)}</td><td>${visualList}</td></tr>`;
+            }
+            html += `</table>`;
+        }
+
+        // Data Sources — expanded with physical table mapping and consumer catalog
+        if (this.lineageEngine) {
+            const dataSources = this.lineageEngine.getAllDataSources();
+            if (dataSources.length > 0) {
+                html += `<h2 id="data-sources">Data Sources</h2>
+<p style="font-size:13px;color:var(--text-secondary,#666);margin-bottom:16px">Data engineer view: physical tables loaded, column renames, and which measures &amp; visuals consume each source.</p>`;
+                for (const src of dataSources) {
+                    const server = src.serverResolved || src.server || src.url || src.path || '';
+                    const db     = src.databaseResolved || src.database || '';
+                    const gw     = src.gatewayRequired === true ? '<span style="margin-left:6px;font-size:11px;color:#c62828;background:#ffebee;padding:1px 6px;border-radius:2px">Gateway Required</span>' : '';
+                    const param  = src.parameterized ? '<span style="margin-left:6px;font-size:11px;color:#1565c0;background:#e3f2fd;padding:1px 6px;border-radius:2px">Parameterized</span>' : '';
+                    const sourceId   = `source:${MExpressionParser._sourceKey(src)}`;
+                    const consumers  = this.lineageEngine.getDataSourceConsumers(sourceId);
+
+                    const nonLoaded = src.isNonLoadedQuery ? `<span class="badge-hidden-query" style="margin-left:6px;font-size:11px;color:#6a1b9a;background:#f3e5f5;padding:1px 6px;border-radius:2px">Non-loaded query: ${this._escHtml(src.expressionName || '')}</span>` : '';
+                    const borderColor = src.isNonLoadedQuery ? 'var(--field-param,#7e57c2)' : 'var(--primary,#1a3a5c)';
+                    html += `<div class="ds-source-card" style="margin:12px 0;padding:14px 16px;background:var(--surface,#f8f6f1);border:1px solid var(--border,#d0ccc4);border-left:4px solid ${borderColor};border-radius:2px">`;
+                    html += `<h4 style="margin:0 0 6px;font-size:14px">${this._escHtml(src.type)}`;
+                    if (server) html += ` <code style="font-size:12px;font-weight:normal">${this._escHtml(server)}</code>`;
+                    if (db) html += ` / <code style="font-size:12px;font-weight:normal">${this._escHtml(db)}</code>`;
+                    html += `${param}${gw}${nonLoaded}</h4>`;
+
+                    if (src.isNonLoadedQuery && consumers.tables.length > 0) {
+                        html += `<p style="font-size:12px;margin:6px 0 4px;font-weight:600">Referenced by tables (via merge/append/delegation): ${consumers.tables.length}</p><ul style="margin:0 0 8px;padding-left:20px;font-size:12px">`;
+                        for (const t of consumers.tables) {
+                            html += `<li><strong>${this._escHtml(t.name)}</strong></li>`;
+                        }
+                        html += `</ul>`;
+                    } else if (consumers.tables.length > 0) {
+                        html += `<p style="font-size:12px;margin:6px 0 4px;font-weight:600">Physical tables loaded (${consumers.tables.length}):</p><ul style="margin:0 0 8px;padding-left:20px;font-size:12px">`;
+                        for (const t of consumers.tables) {
+                            const physLabel = [t.physicalSchema, t.physicalTable].filter(Boolean).join('.');
+                            html += `<li><strong>${this._escHtml(t.name)}</strong>`;
+                            if (physLabel) html += ` ← <code>${this._escHtml(physLabel)}</code>`;
+                            if (t.renames.length > 0) {
+                                const rs = t.renames.map(r => `<code>${this._escHtml(r.sourceName)}</code> → <code>${this._escHtml(r.modelName)}</code>`).join(', ');
+                                html += `<br><span style="color:#555;font-size:11px">Renames: ${rs}</span>`;
+                            }
+                            if (t.addedColumns.length > 0) {
+                                html += `<br><span style="color:#555;font-size:11px">Computed: ${t.addedColumns.map(c => `<code>${this._escHtml(c)}</code>`).join(', ')}</span>`;
+                            }
+                            html += `</li>`;
+                        }
+                        html += `</ul>`;
+                    }
+
+                    const mCount = consumers.measures.length;
+                    const vCount = consumers.visuals.length;
+                    if (mCount > 0 || vCount > 0) {
+                        html += `<p style="font-size:12px;margin:4px 0;color:var(--text-secondary,#666)">Consumed by: <strong>${mCount}</strong> measure${mCount !== 1 ? 's' : ''} · <strong>${vCount}</strong> visual${vCount !== 1 ? 's' : ''} across <strong>${consumers.pages.length}</strong> page${consumers.pages.length !== 1 ? 's' : ''}</p>`;
+                        if (consumers.measures.length > 0) {
+                            html += `<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">`;
+                            for (const m of consumers.measures.slice(0, 12)) {
+                                html += `<span style="display:inline-block;background:#fff;border:1px solid var(--border,#d0ccc4);border-radius:2px;padding:1px 6px;font-family:monospace;font-size:11px">[${this._escHtml(m.name)}]</span>`;
+                            }
+                            if (consumers.measures.length > 12) html += `<span style="font-size:11px;color:#666;align-self:center">+${consumers.measures.length - 12} more</span>`;
+                            html += `</div>`;
+                        }
+                    }
+                    html += `</div>`;
+                }
+            }
+
+            // Visual Lineage — per-visual back-trace
+            if (scope !== 'model' && visualData && visualData.visuals && visualData.visuals.length > 0) {
+                const DECORATION_TYPES = new Set(['actionButton','shape','textbox','bookmarkNavigator','pageNavigator','image','groupContainer']);
+                const dataBoundVisuals = visualData.visuals.filter(v => !DECORATION_TYPES.has(v.visualType) && v.fields && v.fields.length > 0);
+
+                if (dataBoundVisuals.length > 0) {
+                    html += `<h2 id="data-lineage">Visual Lineage</h2>`;
+                    for (const visual of dataBoundVisuals) {
+                        const lineage = this.lineageEngine.getVisualLineage(visual.pageName, visual.visualName);
+                        html += `<div style="margin:16px 0;padding:14px 16px;background:var(--code-bg,#f5f2ed);border:1px solid var(--border,#d0ccc4);border-left:4px solid var(--accent,#c89632);border-radius:2px">`;
+                        html += `<h4 style="margin:0 0 8px">${this._escHtml(visual.visualName || visual.visualType)} <span style="font-size:12px;font-weight:normal;color:#666">— ${this._escHtml(visual.pageName)}</span></h4>`;
+
+                        if (!lineage) { html += `<p style="font-size:12px;color:#999">No lineage resolved.</p></div>`; continue; }
+
+                        if (lineage.fields && lineage.fields.length > 0) {
+                            html += `<p style="font-size:12px;font-weight:600;margin:0 0 4px">Fields:</p><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px">`;
+                            for (const f of lineage.fields) {
+                                const badge = f.type === 'measure' ? '#c8a200' : '#1565c0';
+                                html += `<span style="font-size:11px;font-family:monospace;background:#fff;border:1px solid #ccc;border-left:3px solid ${badge};border-radius:2px;padding:1px 6px">${this._escHtml((f.table||f.entity)+'['+f.name+']')}</span>`;
+                            }
+                            html += `</div>`;
+                        }
+
+                        if (lineage.tables && lineage.tables.length > 0) {
+                            html += `<p style="font-size:12px;font-weight:600;margin:0 0 4px">Tables → Physical Source:</p><ul style="margin:0 0 8px;padding-left:20px;font-size:12px">`;
+                            for (const t of lineage.tables) {
+                                html += `<li><strong>${this._escHtml(t.name)}</strong>`;
+                                if (t.physicalSchema || t.physicalTable) {
+                                    html += ` → <code>${this._escHtml([t.physicalSchema,t.physicalTable].filter(Boolean).join('.'))}</code>`;
+                                }
+                                if (t.renames && t.renames.length > 0) {
+                                    html += ` <span style="color:#888;font-size:11px">(${t.renames.length} rename${t.renames.length!==1?'s':''})</span>`;
+                                }
+                                if (this.mSteps) {
+                                    const steps = this.mSteps.get(t.name);
+                                    if (steps && steps.length > 0) {
+                                        const src = steps.find(s => s.kind === 'Source') || steps[0];
+                                        const preview = src.exprText.length > 80 ? src.exprText.slice(0,80)+'…' : src.exprText;
+                                        html += `<br><span style="font-size:11px;color:#555">First step: <strong>${this._escHtml(src.name)}</strong> [${src.kind}] <code>${this._escHtml(preview)}</code></span>`;
+                                    }
+                                }
+                                html += `</li>`;
+                            }
+                            html += `</ul>`;
+                        }
+
+                        if (lineage.measures && lineage.measures.length > 0) {
+                            html += `<p style="font-size:12px;font-weight:600;margin:0 0 4px">Measures:</p><div style="display:flex;flex-wrap:wrap;gap:3px">`;
+                            for (const m of lineage.measures) {
+                                html += `<span style="font-size:11px;font-family:monospace;background:#fff8e1;border:1px solid #ffe082;border-radius:2px;padding:1px 6px">${this._escHtml('['+m.name+']')}</span>`;
+                            }
+                            html += `</div>`;
+                        }
+                        html += `</div>`;
+                    }
+                }
+            }
+        }
+
+        // Dynamic Features (HTML)
+        html += this._buildHTMLDynamicFeatures();
+
+        // Footer — styled card
+        html += `<div class="footer" style="margin-top:40px;padding:20px 24px;background:#f9f9f9;border:1px solid #e0e0e0;border-left:4px solid #86BC25;border-radius:2px;font-family:sans-serif;">
+    <p style="margin:0 0 8px;font-weight:700;color:#111111;">Generated with <a href="https://bredeespelid.github.io/PBIP_SemLin/" target="_blank" style="color:#000;text-decoration:underline;">PBIP SemLin</a> — a tool for Power BI documentation.</p>
+    <p style="margin:0;font-size:13px;color:#666;">Hosted at <a href="https://github.com/bredeespelid/PBIP_SemLin" target="_blank" style="color:#666;text-decoration:underline;">github.com/bredeespelid/PBIP_SemLin</a></p>
+</div>
+</body>
+</html>`;
+
+        return html;
+    }
+
+    _normalizeRoleForReport(projectionName) {
+        if (!projectionName) return 'Other';
+        const lower = projectionName.toLowerCase();
+        if (lower === 'values' || lower === 'y') return 'Values';
+        if (lower === 'category' || lower === 'x' || lower === 'axis' || lower === 'rows' || lower === 'columns') return 'Category';
+        if (lower === 'series' || lower === 'legend') return 'Series';
+        if (lower === 'filter' || lower === 'filters') return 'Filters';
+        if (lower === 'tooltips' || lower === 'tooltip') return 'Tooltips';
+        if (lower === 'sort' || lower === 'visualobjects') return 'Other';
+        return projectionName.charAt(0).toUpperCase() + projectionName.slice(1);
+    }
+
+    /**
+     * Returns NAMEOF field items for a field parameter table, or null if not a field parameter.
+     * Checks both column expressions and partition sources for NAMEOF/SWITCH patterns.
+     * Returns [] if detected as field param (via SWITCH) but no NAMEOF references found.
+     */
+    _getFieldParameterItems(tableName) {
+        const table = this.model.tables.find(t => t.name === tableName);
+        if (!table) return null;
+
+        // Collect all expression texts from columns and partitions
+        const allExpressions = [];
+        for (const col of table.columns) {
+            if (col.expression) allExpressions.push(col.expression);
+        }
+        for (const part of table.partitions) {
+            if (part.source) allExpressions.push(part.source);
+        }
+
+        // Require NAMEOF specifically (not SWITCH alone) to avoid false positives
+        const isFieldParam = allExpressions.some(expr => /\bNAMEOF\s*\(/i.test(expr));
+        if (!isFieldParam) return null;
+
+        const items = [];
+        for (const expr of allExpressions) {
+            // Handle both quoted ('TableName') and unquoted (TableName) table references
+            const matches = [...expr.matchAll(/NAMEOF\s*\(\s*(?:'([^']+)'|(\w+))\[([^\]]+)\]\s*\)/gi)];
+            for (const m of matches) items.push({ table: m[1] || m[2], column: m[3] });
+        }
+        return items;
+    }
+
+    /**
+     * Returns calculation group items for a table, or null if not a calc group table.
+     */
+    _getCalculationGroupItems(tableName) {
+        const table = this.model.tables.find(t => t.name === tableName);
+        if (!table || !table.calculationGroup || table.calculationGroup.items.length === 0) return null;
+        return table.calculationGroup.items;
+    }
+
+    _getDynamicFeaturesTables() {
+        const fieldParams = [];
+        const calcGroups = [];
+        for (const table of this.model.tables) {
+            const fpItems = this._getFieldParameterItems(table.name);
+            if (fpItems !== null) fieldParams.push({ table: table.name, items: fpItems });
+            const cgItems = this._getCalculationGroupItems(table.name);
+            if (cgItems !== null) calcGroups.push({ table: table.name, items: cgItems, precedence: table.calculationGroup?.precedence });
+        }
+        return { fieldParams, calcGroups };
+    }
+
+    _appendMarkdownDynamicFeatures(lines, visualData) {
+        const dyn = this._getDynamicFeaturesTables();
+        if (dyn.fieldParams.length === 0 && dyn.calcGroups.length === 0) return;
+
+        lines.push('## Dynamic Features');
+        lines.push('');
+        lines.push('> These features create dynamic behavior that PBIR JSON does not fully represent.');
+        lines.push('> Field parameters show only the last-saved selection; calculation group columns appear as ordinary column references.');
+        lines.push('');
+
+        if (dyn.fieldParams.length > 0) {
+            lines.push(`### Field Parameters (${dyn.fieldParams.length})`);
+            lines.push('');
+            for (const fp of dyn.fieldParams) {
+                lines.push(`#### \`${fp.table}\``);
+                lines.push('');
+                lines.push(`**What PBIR hides:** JSON stores only the last-saved selection. This parameter dynamically switches between **${fp.items.length} fields**:`);
+                lines.push('');
+                for (const item of fp.items) {
+                    lines.push(`- \`'${item.table}'[${item.column}]\``);
+                }
+                // Which visuals use it
+                if (visualData && visualData.pages) {
+                    const usingVisuals = [];
+                    for (const page of visualData.pages) {
+                        for (const v of page.visuals) {
+                            if (v.fields && v.fields.some(f => (f.table || f.entity) === fp.table)) {
+                                usingVisuals.push(`${v.visualName || v.visualType} (${page.displayName})`);
+                            }
+                        }
+                    }
+                    if (usingVisuals.length > 0) {
+                        lines.push('');
+                        lines.push(`Used by: ${usingVisuals.join(', ')}`);
+                    }
+                }
+                lines.push('');
+            }
+        }
+
+        if (dyn.calcGroups.length > 0) {
+            lines.push(`### Calculation Groups (${dyn.calcGroups.length})`);
+            lines.push('');
+            for (const cg of dyn.calcGroups) {
+                const precLabel = cg.precedence != null ? ` (precedence: ${cg.precedence})` : '';
+                lines.push(`#### \`${cg.table}\`${precLabel}`);
+                lines.push('');
+                lines.push(`**What PBIR hides:** This appears as an ordinary column reference in JSON. In reality, it contains **${cg.items.length} DAX transformations** that modify every co-visual measure.`);
+                lines.push('');
+                const sorted = [...cg.items].sort((a, b) => (a.ordinal ?? 999) - (b.ordinal ?? 999));
+                for (const item of sorted) {
+                    lines.push(`- **${this._escMd(item.name)}**`);
+                    if (item.expression) {
+                        lines.push('  ```dax');
+                        for (const el of item.expression.split('\n')) {
+                            lines.push(`  ${el}`);
+                        }
+                        lines.push('  ```');
+                    }
+                }
+                lines.push('');
+            }
+        }
+    }
+
+    _buildHTMLDynamicFeatures() {
+        const dyn = this._getDynamicFeaturesTables();
+        if (dyn.fieldParams.length === 0 && dyn.calcGroups.length === 0) return '';
+
+        let html = `<h2 id="dynamic-features">Dynamic Features</h2>
+<p style="font-size:13px;color:#666;margin-bottom:16px">These features create dynamic behavior that PBIR JSON does not fully represent.</p>`;
+
+        for (const fp of dyn.fieldParams) {
+            html += `<div style="margin:12px 0;padding:12px 16px;background:#e3f2fd;border-left:4px solid #1565c0;border-radius:4px">
+<h4 style="margin:0 0 6px">'${this._escHtml(fp.table)}' <span style="display:inline-block;padding:1px 6px;background:#e3f2fd;color:#1565c0;font-size:10px;border-radius:2px">Field Parameter</span></h4>
+<p style="font-size:12px;margin:0 0 8px;background:#fff8e1;padding:6px 10px;border:1px solid #ffe082;border-radius:3px"><strong>What PBIR hides:</strong> JSON stores only the last-saved selection. This parameter dynamically switches between <strong>${fp.items.length} fields</strong>.</p>
+<div style="display:flex;flex-wrap:wrap;gap:4px">`;
+            for (const item of fp.items) {
+                html += `<span style="display:inline-block;background:#fff;border:1px solid #bbdefb;border-radius:3px;padding:1px 6px;font-family:monospace;font-size:11px">'${this._escHtml(item.table)}'[${this._escHtml(item.column)}]</span>`;
+            }
+            html += `</div></div>`;
+        }
+
+        for (const cg of dyn.calcGroups) {
+            const precLabel = cg.precedence != null ? ` — precedence: ${cg.precedence}` : '';
+            html += `<div style="margin:12px 0;padding:12px 16px;background:#e8f5e9;border-left:4px solid #2e7d32;border-radius:4px">
+<h4 style="margin:0 0 6px">'${this._escHtml(cg.table)}' <span style="display:inline-block;padding:1px 6px;background:#e8f5e9;color:#2e7d32;font-size:10px;border-radius:2px">Calc Group${precLabel}</span></h4>
+<p style="font-size:12px;margin:0 0 8px;background:#fff8e1;padding:6px 10px;border:1px solid #ffe082;border-radius:3px"><strong>What PBIR hides:</strong> This appears as an ordinary column reference in JSON. In reality, it contains <strong>${cg.items.length} DAX transformations</strong> that modify every co-visual measure.</p>`;
+            const sorted = [...cg.items].sort((a, b) => (a.ordinal ?? 999) - (b.ordinal ?? 999));
+            for (const item of sorted) {
+                html += `<div style="margin:4px 0"><span style="display:inline-block;background:#fff;border:1px solid #c8e6c9;border-radius:3px;padding:1px 6px;font-family:monospace;font-size:11px">${this._escHtml(item.name)}</span>`;
+                if (item.expression) {
+                    html += `<details style="margin-top:2px"><summary style="font-size:11px;color:#555;cursor:pointer">Expression</summary>
+<div class="dax-block" style="margin:4px 0;font-size:11px">${this._highlightDAX(item.expression)}</div></details>`;
+                }
+                html += `</div>`;
+            }
+            html += `</div>`;
+        }
+
+        return html;
+    }
+
+    /**
+     * Renders a compact ASCII layout grid of visual positions for Markdown output.
+     * Groups visuals into rows by proximity (y within 80px), then sorts by x.
+     * Returns a fenced code block string, or null if no positioned visuals.
+     */
+    _renderAsciiLayout(page) {
+        const pw = page.pageWidth || 1280;
+        const ph = page.pageHeight || 720;
+        const visuals = page.visuals.filter(v => v.position && v.position.x != null);
+        if (visuals.length === 0) return null;
+
+        // Sort by y then x
+        const sorted = [...visuals].sort((a, b) => {
+            const dy = (a.position.y || 0) - (b.position.y || 0);
+            if (Math.abs(dy) > 80) return dy;
+            return (a.position.x || 0) - (b.position.x || 0);
+        });
+
+        // Group into rows (visuals whose y is within 80px of the row's first visual)
+        const rows = [];
+        for (const v of sorted) {
+            const y = v.position.y || 0;
+            const lastRow = rows[rows.length - 1];
+            if (lastRow && (y - (lastRow[0].position.y || 0)) <= 80) {
+                lastRow.push(v);
+            } else {
+                rows.push([v]);
+            }
+        }
+
+        const W = 72;
+        const SEP = '+' + '-'.repeat(W) + '+';
+        const lines = ['```'];
+        lines.push(`Page Layout: ${pw} \u00d7 ${ph}`);
+        lines.push(SEP);
+
+        for (const row of rows) {
+            const colW = Math.max(8, Math.floor(W / row.length));
+            let nameLine = '|';
+            let sizeLine = '|';
+            for (const v of row) {
+                const name = v.visualName || v.visualType || 'visual';
+                const truncName = name.length > colW - 2 ? name.substring(0, colW - 3) + '\u2026' : name;
+                const pos = `${v.position.width || '?'}\u00d7${v.position.height || '?'}`;
+                nameLine += (' ' + truncName).padEnd(colW) + '|';
+                sizeLine += (' ' + pos).padEnd(colW) + '|';
+            }
+            lines.push(nameLine);
+            lines.push(sizeLine);
+            lines.push(SEP);
+        }
+
+        lines.push('```');
+        return lines.join('\n');
+    }
+
+    // ──────────────────────────────────────────────
+    // JSON
+    // ──────────────────────────────────────────────
+
+    generateJSON() {
+        const totalMeasures = this.model.tables.reduce((sum, t) => sum + t.measures.length, 0);
+        const totalColumns = this.model.tables.reduce((sum, t) => sum + t.columns.length, 0);
+
+        const output = {
+            _generator: 'pbip-semlin',
+            _generated: new Date().toISOString(),
+            _url: 'https://github.com/bredeespelid/PBIP_SemLin',
+            overview: {
+                databaseName: this.model.database?.name || null,
+                compatibilityLevel: this.model.database?.compatibilityLevel || null,
+                culture: this.model.model?.culture || null,
+                tableCount: this.model.tables.length,
+                columnCount: totalColumns,
+                measureCount: totalMeasures,
+                relationshipCount: this.model.relationships.length,
+                roleCount: this.model.roles.length
+            },
+            tables: this.model.tables.map(t => ({
+                name: t.name,
+                description: t.description,
+                isHidden: t.isHidden,
+                columns: t.columns.map(col => {
+                    const base = { ...col };
+                    if (this.lineageEngine && !col.isHidden) {
+                        const consumers = this.lineageEngine.getColumnConsumers(t.name, col.name);
+                        if (consumers.measures.length > 0 || consumers.directVisuals.length > 0) {
+                            base.whereUsed = {
+                                measures: consumers.measures,
+                                visuals:  consumers.directVisuals,
+                                pages:    consumers.pages
+                            };
+                        }
+                    }
+                    return base;
+                }),
+                measures: t.measures.map(m => ({
+                    ...m,
+                    references: this.measureRefs[m.name] || null,
+                    visualUsage: this.visualUsage[`measure|${t.name}|${m.name}`] || []
+                })),
+                hierarchies: t.hierarchies,
+                partitions: t.partitions
+            })),
+            relationships: this.model.relationships,
+            roles: this.model.roles,
+            expressions: this.model.expressions,
+            visualUsage: this.visualUsage,
+            dataSources: this.lineageEngine ? this.lineageEngine.getAllDataSources().map(src => {
+                const sourceId = `source:${MExpressionParser._sourceKey(src)}`;
+                const consumers = this.lineageEngine.getDataSourceConsumers(sourceId);
+                return { ...src, consumers };
+            }) : []
+        };
+
+        return JSON.stringify(output, null, 2);
+    }
+
+    // ──────────────────────────────────────────────
+    // HELPERS
+    // ──────────────────────────────────────────────
+
+    _escMd(str) {
+        if (!str) return '';
+        return str.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    }
+
+    _escHtml(str) {
+        if (!str) return '';
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    _anchor(name) {
+        return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    }
+
+    _formatCardinality(r) {
+        const from = r.fromCardinality || 'many';
+        const to = r.toCardinality || 'one';
+        return `${from}:${to}`;
+    }
+
+    _groupByPage(usages) {
+        const byPage = {};
+        for (const u of usages) {
+            if (!byPage[u.pageName]) byPage[u.pageName] = [];
+            byPage[u.pageName].push(u);
+        }
+        return byPage;
+    }
+
+    /**
+     * Basic DAX syntax highlighting for HTML output
+     */
+    _highlightDAX(dax) {
+        let html = this._escHtml(dax);
+
+        // 1. Comments (must be first)
+        html = html.replace(/(\/\/.*?)(\n|$)/g, '<span class="dax-comment">$1</span>$2');
+        html = html.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="dax-comment">$1</span>');
+
+        // 2. Strings
+        html = html.replace(/(&quot;[^&]*?&quot;)/g, '<span class="dax-string">$1</span>');
+
+        // 3. Column/measure references (BEFORE numbers — prevents [Sales 2024] breakage)
+        html = html.replace(/(\w+|\&#39;[^&]+\&#39;)\[([^\]]+)\]/g, '<span class="dax-ref">$1[$2]</span>');
+        html = html.replace(/\[([^\]]+)\]/g, '<span class="dax-ref">[$1]</span>');
+
+        // 4. DAX keywords
+        const keywords = ['VAR', 'RETURN', 'IF', 'THEN', 'ELSE', 'SWITCH', 'TRUE', 'FALSE', 'BLANK', 'IN', 'NOT', 'AND', 'OR', 'DEFINE', 'EVALUATE', 'ORDER BY', 'ASC', 'DESC', 'MEASURE', 'COLUMN', 'TABLE', 'SELECTEDMEASURE'];
+        for (const kw of keywords) {
+            html = html.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="dax-keyword">$1</span>');
+        }
+
+        // 5. DAX functions
+        html = html.replace(/\b([A-Z][A-Z0-9_.]*)\s*\(/g, '<span class="dax-function">$1</span>(');
+
+        // 6. Numbers (LAST — so they don't break refs with digits in names)
+        html = html.replace(/(?<!["\w\[])(\b\d+\.?\d*\b)(?![^\[]*\])/g, '<span class="dax-number">$1</span>');
+
+        return html;
+    }
+}
+
+// Export
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = DocGenerator;
+}

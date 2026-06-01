@@ -1,0 +1,110 @@
+[
+  {
+    "ID": "DAX_COLUMNS_FULLY_QUALIFIED",
+    "Name": "Column references should be fully qualified",
+    "Category": "DAX Expressions",
+    "Description": "Using fully qualified column references ('Table'[Column]) makes it easier to distinguish between columns and measures and helps avoid errors in complex expressions.",
+    "Severity": 2,
+    "Scope": "Measure, CalculatedColumn",
+    "evalJS": "(model) => {\n  const findings = [];\n  const unqualifiedColumnRegex = /(?<!['\\w])\\[(.*?)\\]/g;\n  \n  model.tables.forEach(t => {\n    if (t._isAutoDate) return;\n    const objects = [...t.measures, ...t.columns.filter(c => c.expression)];\n    \n    objects.forEach(obj => {\n      if (obj.expression && obj.expression.match(unqualifiedColumnRegex)) {\n        findings.push({\n          table: t.name,\n          object: obj.name,\n          type: obj.expression ? 'Measure/CalcColumn' : 'Column',\n          message: `The object [${obj.name}] contains column references without a table name. Use 'Table'[Column].`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "DAX_DIVISION_COLUMNS",
+    "Name": "Avoid division operator (use DIVIDE)",
+    "Category": "DAX Expressions",
+    "Description": "It is recommended to use the DIVIDE function instead of the forward slash (/) operator to handle division-by-zero safely, unless the denominator is a constant.",
+    "Severity": 3,
+    "Scope": "Measure, CalculatedColumn",
+    "evalJS": "(model) => {\n  const findings = [];\n  model.tables.forEach(t => {\n    if (t._isAutoDate) return;\n    const objects = [...t.measures, ...t.columns.filter(c => c.expression)];\n    \n    objects.forEach(obj => {\n      if (obj.expression && obj.expression.includes('/') && !/\\/\\s*\\d+/.test(obj.expression)) {\n        findings.push({\n          table: t.name,\n          object: obj.name,\n          type: 'DAX',\n          message: `Consider replacing '/' with the DIVIDE function in [${obj.name}] for safer error handling.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "DAX_MEASURES_UNQUALIFIED",
+    "Name": "Measure references should be unqualified",
+    "Category": "DAX Expressions",
+    "Description": "Measures should be referenced without the table name. This makes it easier to move measures between tables and provides a clear visual distinction from columns.",
+    "Severity": 2,
+    "Scope": "Measure, CalculatedColumn",
+    "evalJS": "(model) => {\n  const findings = [];\n  const qualifiedMeasureRegex = /('\\w+'|\\w+)\\[(.*?)\\]/g;\n  \n  model.tables.forEach(t => {\n    const objects = [...t.measures, ...t.columns.filter(c => c.expression)];\n    objects.forEach(obj => {\n      if (obj.expression && qualifiedMeasureRegex.test(obj.expression)) {\n        findings.push({\n          table: t.name,\n          object: obj.name,\n          type: 'DAX',\n          message: `The measure [${obj.name}] refers to other objects with a table name. Remove the table name for measure references.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "DAX_TODO",
+    "Name": "Resolve TODO tasks in DAX",
+    "Category": "DAX Expressions",
+    "Description": "Objects containing the text 'TODO' in their expression or comments should be completed before publishing the model.",
+    "Severity": 1,
+    "Scope": "Measure, Column",
+    "evalJS": "(model) => {\n  const findings = [];\n  model.tables.forEach(t => {\n    const objects = [...t.measures, ...t.columns.filter(c => c.expression)];\n    objects.forEach(obj => {\n      if (obj.expression && obj.expression.toUpperCase().includes('TODO')) {\n        findings.push({\n          table: t.name,\n          object: obj.name,\n          type: 'DAX',\n          message: `The object [${obj.name}] contains a TODO comment that should be addressed.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "APPLY_FORMAT_STRING_COLUMNS",
+    "Name": "Provide format string for numeric columns",
+    "Category": "Formatting",
+    "Description": "Visible numeric columns should have a defined format string to ensure consistent display in reports.",
+    "Severity": 2,
+    "Scope": "Column",
+    "evalJS": "(model) => {\n  const findings = [];\n  const numTypes = ['Int64', 'Double', 'Decimal', 'DateTime'];\n  model.tables.forEach(t => {\n    if (t._isAutoDate) return;\n    t.columns.forEach(c => {\n      if (!c.isHidden && numTypes.includes(c.dataType) && (!c.formatString || c.formatString.trim() === '')) {\n        findings.push({\n          table: t.name,\n          object: c.name,\n          type: 'Column',\n          message: `The visible column [${c.name}] is missing a format string.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "APPLY_FORMAT_STRING_MEASURES",
+    "Name": "Provide format string for measures",
+    "Category": "Formatting",
+    "Description": "All visible measures should have a format string assigned (e.g., Currency, Percentage, or Whole Number).",
+    "Severity": 2,
+    "Scope": "Measure",
+    "evalJS": "(model) => {\n  const findings = [];\n  model.tables.forEach(t => {\n    t.measures.forEach(m => {\n      if (!m.isHidden && (!m.formatString || m.formatString.trim() === '')) {\n        findings.push({\n          table: t.name,\n          object: m.name,\n          type: 'Measure',\n          message: `The measure [${m.name}] is missing a format string.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "META_AVOID_FLOAT",
+    "Name": "Avoid floating point data types (Double)",
+    "Category": "Metadata",
+    "Description": "Use 'Decimal' (Fixed Decimal Number) instead of 'Double' (Float) to avoid unexpected results due to rounding issues in calculations.",
+    "Severity": 3,
+    "Scope": "Column",
+    "evalJS": "(model) => {\n  const findings = [];\n  model.tables.forEach(t => {\n    t.columns.forEach(c => {\n      if (c.dataType === 'Double') {\n        findings.push({\n          table: t.name,\n          object: c.name,\n          type: 'Column',\n          message: `Column [${c.name}] uses the 'Double' data type. Consider changing it to 'Decimal' for better precision.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "META_SUMMARIZE_NONE",
+    "Name": "Disable automatic summarization",
+    "Category": "Metadata",
+    "Description": "Set the 'SummarizeBy' property of numeric columns to 'None'. Create explicit measures for summarization instead.",
+    "Severity": 1,
+    "Scope": "Column",
+    "evalJS": "(model) => {\n  const findings = [];\n  const numTypes = ['Int64', 'Double', 'Decimal'];\n  model.tables.forEach(t => {\n    if (t._isAutoDate) return;\n    t.columns.forEach(c => {\n      if (!c.isHidden && numTypes.includes(c.dataType) && c.summarizeBy && c.summarizeBy.toLowerCase() !== 'none') {\n        findings.push({\n          table: t.name,\n          object: c.name,\n          type: 'Column',\n          message: `Column [${c.name}] has automatic summarization enabled. Set this to 'None'.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "LAYOUT_HIDE_FK_COLUMNS",
+    "Name": "Hide foreign key columns",
+    "Category": "Model Layout",
+    "Description": "Columns used in relationships (on the many-side) should be hidden from end users, as filtering should be applied through the dimension table.",
+    "Severity": 1,
+    "Scope": "Column",
+    "evalJS": "(model) => {\n  const findings = [];\n  const relColumns = new Set(model.relationships.map(r => `${r.fromTable}|${r.fromColumn}`));\n  \n  model.tables.forEach(t => {\n    t.columns.forEach(c => {\n      if (!c.isHidden && relColumns.has(`${t.name}|${c.name}`)) {\n        findings.push({\n          table: t.name,\n          object: c.name,\n          type: 'Column',\n          message: `The foreign key [${c.name}] is visible. This column should be hidden.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "UPPERCASE_FIRST_LETTER",
+    "Name": "Capitalize first letter of names",
+    "Category": "Naming Conventions",
+    "Description": "All tables, columns, and measures should start with an uppercase letter for a professional and consistent look.",
+    "Severity": 2,
+    "Scope": "All",
+    "evalJS": "(model) => {\n  const findings = [];\n  model.tables.forEach(t => {\n    if (t._isAutoDate) return;\n    if (t.name[0] !== t.name[0].toUpperCase()) {\n      findings.push({ table: t.name, object: t.name, type: 'Table', message: 'The table name starts with a lowercase letter.' });\n    }\n    t.columns.forEach(c => {\n      if (!c.isHidden && c.name[0] !== c.name[0].toUpperCase()) {\n        findings.push({ table: t.name, object: c.name, type: 'Column', message: 'The column name starts with a lowercase letter.' });\n      }\n    });\n    t.measures.forEach(m => {\n      if (m.name[0] !== m.name[0].toUpperCase()) {\n        findings.push({ table: t.name, object: m.name, type: 'Measure', message: 'The measure name starts with a lowercase letter.' });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "PERF_UNUSED_COLUMNS",
+    "Name": "Remove unused columns",
+    "Category": "Performance",
+    "Description": "Hidden columns that are not referenced in any expressions or relationships take up unnecessary memory. Consider removing them.",
+    "Severity": 2,
+    "Scope": "Column",
+    "evalJS": "(model) => {\n  const findings = [];\n  const allExpressions = model.tables.flatMap(t => [\n    ...t.measures.map(m => m.expression),\n    ...t.columns.map(c => c.expression)\n  ]).join(' ');\n  \n  const relCols = new Set([\n    ...model.relationships.map(r => `${r.fromTable}|${r.fromColumn}`),\n    ...model.relationships.map(r => `${r.toTable}|${r.toColumn}`)\n  ]);\n\n  model.tables.forEach(t => {\n    if (t._isAutoDate) return;\n    t.columns.forEach(c => {\n      if (c.isHidden && !relCols.has(`${t.name}|${c.name}`) && !allExpressions.includes(`[${c.name}]`)) {\n        findings.push({\n          table: t.name,\n          object: c.name,\n          type: 'Column',\n          message: `Column [${c.name}] is hidden and does not appear to be in use. Consider removing it.`\n        });\n      }\n    });\n  });\n  return findings;\n}"
+  },
+  {
+    "ID": "DISABLE_AUTO_DATE_TIME",
+    "Name": "Disable Auto Date/Time",
+    "Category": "Model Layout",
+    "Description": "Power BI's 'Auto Date/Time' feature creates hidden date tables that increase file size. Use a dedicated Date/Calendar table instead.",
+    "Severity": 3,
+    "Scope": "Model",
+    "evalJS": "(model) => {\n  const findings = [];\n  const autoDateTables = model.tables.filter(t => t._isAutoDate);\n  if (autoDateTables.length > 0) {\n    findings.push({\n      table: 'Global',\n      object: 'Model',\n      type: 'Model',\n      message: `The model contains ${autoDateTables.length} automatic date tables. Disable 'Auto Date/Time' in the settings.`\n    });\n  }\n  return findings;\n}"
+  }
+]

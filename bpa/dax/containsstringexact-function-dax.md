@@ -1,0 +1,52 @@
+---
+description: "Learn more about: CONTAINSSTRINGEXACT"
+title: "CONTAINSSTRINGEXACT function (DAX)"
+ms.topic: reference
+---
+# CONTAINSSTRINGEXACT
+
+[!INCLUDE[applies-to-measures-columns-tables-visual-calculations](includes/applies-to-measures-columns-tables-visual-calculations.md)]
+
+Returns `TRUE` or `FALSE` indicating whether one string contains another string.
+
+## Syntax
+
+```dax
+CONTAINSSTRINGEXACT(<within_text>, <find_text>)
+```
+
+### Parameters
+
+|Term|Definition|
+|--------|--------------|
+|`within_text`|The text in which you want to search for find_text.|
+|`find_text`|The text you want to find.|
+
+## Return value
+
+ `TRUE`  if find_text is a substring of within_text; otherwise `FALSE`.
+
+## Remarks
+
+CONTAINSSTRINGEXACT is case-sensitive.
+
+## Example
+
+DAX query
+
+```DAX
+EVALUATE
+    ROW(
+        "Case 1", CONTAINSSTRINGEXACT("abcd", "bc"), 
+        "Case 2", CONTAINSSTRINGEXACT("abcd", "BC"),
+        "Case 3", CONTAINSSTRINGEXACT("abcd", "a*d"),
+        "Case 4", CONTAINSSTRINGEXACT("abcd", "ef")
+    )
+
+```
+
+Returns
+
+|[Case 1]  |[Case 2]  |[Case 3]  |[Case 4]  |
+|---------|---------|---------|---------|
+|`TRUE`     | `FALSE`         | `FALSE`         |`FALSE`          |

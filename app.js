@@ -1,0 +1,4006 @@
+/**
+ * PBIP Documenter — App Module
+ * UI logic, File System Access API integration, event handlers
+ */
+
+class App {
+    constructor() {
+        this.folderHandle = null;
+        this.semanticModelHandle = null;
+        this.reportHandle = null;
+        this.parsedModel = null;
+        this.visualData = null;
+        this.measureRefs = null;
+        this.docGenerator = null;
+        this.diagramRenderer = null;
+        this.lineageEngine = null;
+        this.lineageDiagramRenderer = null;
+        this._diagramRendered = false;
+        this._detailedERDRendered = false;
+        this._lineageRendered = false;
+        this._fieldDiagramRendered = false;
+
+        // Milestone tracking — per-dataset, not global (S8)
+        this._visitedMilestones = new Set();
+        this._dynamicPromptShown = false;
+        this._milestoneDismissed = false;
+
+        this.parseErrors = [];
+
+        this.init();
+    }
+
+    init() {
+        // Check browser support
+        if (!('showDirectoryPicker' in window)) {
+            document.getElementById('browserWarning').classList.remove('hidden');
+            document.getElementById('openFolderBtn').disabled = true;
+            return;
+        }
+
+        // Persona chip selection — remember chosen persona and scroll after parse
+        this._activePersona = 'dev';
+        document.querySelectorAll('.persona-chip').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.persona-chip').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this._activePersona = btn.dataset.persona || 'dev';
+            });
+        });
+
+        // Bind events
+        document.getElementById('openFolderBtn').addEventListener('click', () => this.openFolder());
+        document.getElementById('changeFolderBtn').addEventListener('click', () => this.openFolder());
+        const sampleBtn = document.getElementById('btnSampleData');
+        if (sampleBtn) sampleBtn.addEventListener('click', () => this.loadSampleData());
+        const exportSampleBtn = document.getElementById('btnExportSampleData');
+        if (exportSampleBtn) exportSampleBtn.addEventListener('click', () => this.exportSampleData());
+        document.getElementById('downloadFullReport').addEventListener('click', () => {
+            document.getElementById('htmlOptions').classList.toggle('open');
+        });
+        document.getElementById('downloadHTMLAll').addEventListener('click', (e) => this.downloadFullReport('all', e.currentTarget));
+        document.getElementById('downloadHTMLModel').addEventListener('click', (e) => this.downloadFullReport('model', e.currentTarget));
+        document.getElementById('downloadHTMLVisual').addEventListener('click', (e) => this.downloadFullReport('visuals', e.currentTarget));
+        document.getElementById('downloadMD').addEventListener('click', () => {
+            document.getElementById('mdOptions').classList.toggle('open');
+        });
+        document.getElementById('downloadMDAll').addEventListener('click', (e) => this.downloadMarkdown('all', e.currentTarget));
+        document.getElementById('downloadMDModel').addEventListener('click', (e) => this.downloadMarkdown('model', e.currentTarget));
+        document.getElementById('downloadMDVisual').addEventListener('click', (e) => this.downloadMarkdown('visuals', e.currentTarget));
+
+        // Sidebar navigation
+        document.querySelectorAll('.sidebar-header').forEach(header => {
+            header.addEventListener('click', () => {
+                const section = header.dataset.section;
+                this.showSection(section);
+            });
+            header.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    this.showSection(header.dataset.section);
+                }
+            });
+        });
+
+        // Sidebar delegated click handlers (one listener per list, not per item)
+        document.getElementById('sidebarTableList').addEventListener('click', (e) => {
+            const item = e.target.closest('.sidebar-item[data-table]');
+            if (item) this.showTableDetail(item.dataset.table);
+            const loadMore = e.target.closest('.btn-sidebar-load-more');
+            if (loadMore && this._remainingSidebarTables) {
+                const tableList = document.getElementById('sidebarTableList');
+                loadMore.insertAdjacentHTML('beforebegin', this._remainingSidebarTables
+                    .map(t => `<div class="sidebar-item" data-table="${this._esc(t.name)}">${this._esc(t.name)}</div>`)
+                    .join(''));
+                loadMore.remove();
+                this._remainingSidebarTables = null;
+            }
+        });
+        document.getElementById('sidebarPageList').addEventListener('click', (e) => {
+            const item = e.target.closest('.sidebar-item[data-page-id]');
+            if (item) this.showPageDetail(item.dataset.pageId);
+        });
+        document.getElementById('tableDetailContent').addEventListener('click', (e) => {
+            const btn = e.target.closest('.btn-load-more-measures');
+            if (btn && this._remainingMeasures) {
+                let moreHtml = '';
+                for (const measure of this._remainingMeasures.measures) {
+                    moreHtml += this._renderMeasureCard(measure, this._remainingMeasures.tableName);
+                }
+                const temp = document.createElement('div');
+                temp.innerHTML = moreHtml;
+                btn.before(...temp.childNodes);
+                btn.remove();
+                this._bindDaxToggles(document.getElementById('tableDetailContent'));
+                this._remainingMeasures = null;
+            }
+        });
+
+        // Sidebar search
+        const searchInput = document.getElementById('sidebarSearchInput');
+        const searchClear = document.getElementById('sidebarSearchClear');
+        searchInput.addEventListener('input', () => this.filterSidebar(searchInput.value));
+        searchClear.addEventListener('click', () => {
+            searchInput.value = '';
+            this.filterSidebar('');
+            searchInput.focus();
+        });
+
+        // Ctrl+F shortcut
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                const appBody = document.getElementById('appBody');
+                if (appBody && !appBody.classList.contains('hidden')) {
+                    e.preventDefault();
+                    searchInput.focus();
+                    searchInput.select();
+                }
+            }
+        });
+
+        // Error modal bindings
+        document.getElementById('errorModalClose').addEventListener('click', () => this.hideErrorModal());
+        document.querySelector('.error-modal-backdrop').addEventListener('click', () => this.hideErrorModal());
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const modal = document.getElementById('errorModal');
+                if (modal && !modal.classList.contains('hidden')) {
+                    this.hideErrorModal?.() || modal.classList.add('hidden');
+                }
+            }
+        });
+        document.getElementById('errorModalCopy').addEventListener('click', () => this.copyErrorDetails());
+        document.getElementById('warningBannerDetails').addEventListener('click', () => this.showErrorModal());
+        document.getElementById('warningBannerClose').addEventListener('click', () => {
+            document.getElementById('warningBanner').classList.add('hidden');
+        });
+
+        // BPA filter button clicks
+        document.querySelectorAll('.btn-filter-bpa').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.btn-filter-bpa').forEach(b => {
+                    b.classList.remove('active');
+                    b.style.background = '';
+                    b.style.color = '';
+                });
+                btn.classList.add('active');
+                
+                const sev = btn.dataset.severity;
+                if (sev === 'all') {
+                    btn.style.background = 'var(--primary)';
+                    btn.style.color = '#fff';
+                } else if (sev === 'critical') {
+                    btn.style.background = '#da291c';
+                    btn.style.color = '#fff';
+                } else if (sev === 'warning') {
+                    btn.style.background = '#ffb81c';
+                    btn.style.color = '#111';
+                } else if (sev === 'info') {
+                    btn.style.background = '#00a3e0';
+                    btn.style.color = '#fff';
+                }
+
+                this.filterBPAFindings(sev);
+            });
+        });
+
+        // BPA Modal close bindings
+        const bpaClose = document.getElementById('bpaModalClose');
+        const bpaBackdrop = document.getElementById('bpaLearningBackdrop');
+        if (bpaClose) {
+            bpaClose.addEventListener('click', () => this.hideBPALearningModal());
+        }
+        if (bpaBackdrop) {
+            bpaBackdrop.addEventListener('click', () => this.hideBPALearningModal());
+        }
+
+        // Delegated clicks for findings inside bpaFindingsContainer to open learn more modal
+        const bpaFindings = document.getElementById('bpaFindingsContainer');
+        if (bpaFindings) {
+            bpaFindings.addEventListener('click', (e) => {
+                const group = e.target.closest('.bpa-finding-group');
+                if (group) {
+                    const ruleId = group.dataset.ruleId;
+                    this.showBPALearningModal(ruleId);
+                }
+            });
+        }
+
+        // Sidebar chevron collapse/expand
+        document.querySelectorAll('.sidebar-chevron').forEach(chevron => {
+            chevron.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const section = chevron.closest('.sidebar-section');
+                section.classList.toggle('collapsed');
+                const isExpanded = !section.classList.contains('collapsed');
+                chevron.setAttribute('aria-expanded', String(isExpanded));
+                try { localStorage.setItem('pbip-doc-sidebar-tables-collapsed', !isExpanded); } catch {}
+            });
+        });
+
+        // Track sponsor link clicks via event delegation
+        document.addEventListener('click', (e) => {
+            const link = e.target.closest('a[href*="buymeacoffee.com"], a[href*="github.com/sponsors"]');
+            if (link) {
+                const url = new URL(link.href);
+                const source = url.searchParams.get('o') || 'unknown';
+                this._track('Sponsor Click', { source, platform: link.href.includes('buymeacoffee') ? 'coffee' : 'github' });
+            }
+        });
+
+        // Diagram export buttons (delegated)
+        document.addEventListener('click', (e) => {
+            const exportBtn = e.target.closest('[data-export]');
+            if (exportBtn) {
+                const format = exportBtn.dataset.export;
+                const diagram = exportBtn.dataset.diagram;
+                this._handleDiagramExport(format, diagram);
+            }
+            const zoomBtn = e.target.closest('[data-zoom]');
+            if (zoomBtn) {
+                const action = zoomBtn.dataset.zoom;
+                const targetId = zoomBtn.dataset.target;
+                this._handleLineageZoom(action, targetId);
+            }
+        });
+
+        // Detailed ERD toggle
+        const toggleOverview = document.getElementById('toggleOverview');
+        const toggleDetailedERD = document.getElementById('toggleDetailedERD');
+        if (toggleOverview && toggleDetailedERD) {
+            toggleOverview.addEventListener('click', () => {
+                toggleOverview.classList.add('active');
+                toggleDetailedERD.classList.remove('active');
+                document.getElementById('relationshipsDiagram').classList.remove('hidden');
+                document.getElementById('detailedERDContainer').classList.add('hidden');
+            });
+            toggleDetailedERD.addEventListener('click', () => {
+                toggleDetailedERD.classList.add('active');
+                toggleOverview.classList.remove('active');
+                document.getElementById('relationshipsDiagram').classList.add('hidden');
+                document.getElementById('detailedERDContainer').classList.remove('hidden');
+                if (!this._detailedERDRendered && this.parsedModel) {
+                    this._detailedERDRendered = true;
+                    const container = document.getElementById('detailedERDContainer');
+                    container.innerHTML = '<div class="diagram-controls" id="detailedERDControls"><button class="diagram-ctrl-btn" id="detailedERDZoomIn" title="Zoom In"><span class="material-symbols-outlined">add</span></button><button class="diagram-ctrl-btn" id="detailedERDZoomOut" title="Zoom Out"><span class="material-symbols-outlined">remove</span></button><button class="diagram-ctrl-btn" id="detailedERDZoomReset" title="Fit to View"><span class="material-symbols-outlined">fit_screen</span></button><div class="diagram-ctrl-separator"></div><button class="diagram-ctrl-btn" data-export="svg" data-diagram="detailed-erd" title="Download SVG"><span class="material-symbols-outlined">download</span></button><button class="diagram-ctrl-btn" data-export="drawio" data-diagram="detailed-erd" title="Download draw.io"><span class="material-symbols-outlined">edit_note</span></button></div><div class="loading"><div class="spinner"></div>Building detailed ERD\u2026</div>';
+                    requestAnimationFrame(() => requestAnimationFrame(() => this.renderDetailedERD()));
+                }
+            });
+        }
+
+        // Dark mode toggle
+        const themeBtn = document.getElementById('btnThemeToggle');
+        if (themeBtn) {
+            // Restore saved theme
+            const saved = localStorage.getItem('pbip-doc-theme');
+            if (saved) {
+                document.documentElement.setAttribute('data-theme', saved);
+                document.getElementById('themeIcon').textContent = saved === 'dark' ? 'light_mode' : 'dark_mode';
+            }
+            themeBtn.addEventListener('click', () => {
+                const current = document.documentElement.getAttribute('data-theme');
+                const next = current === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                document.getElementById('themeIcon').textContent = next === 'dark' ? 'light_mode' : 'dark_mode';
+                try { localStorage.setItem('pbip-doc-theme', next); } catch {}
+            });
+        }
+
+        // Mobile sidebar toggle
+        const sidebarToggle = document.getElementById('sidebarToggleBtn');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        if (sidebarToggle) {
+            sidebarToggle.addEventListener('click', () => {
+                document.getElementById('sidebar').classList.toggle('sidebar-open');
+                sidebarOverlay.classList.toggle('active');
+            });
+        }
+        if (sidebarOverlay) {
+            sidebarOverlay.addEventListener('click', () => {
+                document.getElementById('sidebar').classList.remove('sidebar-open');
+                sidebarOverlay.classList.remove('active');
+            });
+        }
+
+        // Fetch GitHub stars for social proof
+        this._fetchGitHubStars();
+    }
+
+    // ──────────────────────────────────────────────
+    // ANALYTICS (Plausible custom events)
+    // ──────────────────────────────────────────────
+
+    _track(event, props) {
+        if (typeof plausible === 'function') plausible(event, props ? { props } : undefined);
+    }
+
+    // ──────────────────────────────────────────────
+    // SPONSOR HELPERS
+    // ──────────────────────────────────────────────
+
+    _showTimeSaved() {
+        if (!this.parsedModel) return;
+        const tables = this.parsedModel.tables.length;
+        const measures = this.parsedModel.tables.reduce((s, t) => s + t.measures.length, 0);
+        const visuals = this.visualData?.visuals?.length || 0;
+        const relationships = this.parsedModel.relationships?.length || 0;
+        const minutes = Math.round((tables * 2) + (measures * 1.5) + (visuals * 1) + (relationships * 0.5));
+        const row = document.getElementById('timeSavedRow');
+        const text = document.getElementById('timeSavedText');
+        if (row && text && minutes > 0) {
+            text.innerHTML = `Estimated manual documentation time saved: <strong>~${minutes} min</strong> (processed ${tables} tables, ${measures} measures, and ${visuals} visuals).`;
+            row.classList.remove('hidden');
+        }
+    }
+
+    _trackMilestone(section) {
+        // Track visited milestones for analytic logs, without displaying sponsor ads
+        const HIGH_VALUE = ['relationships', 'lineage', 'visual-usage', 'table-detail', 'data-sources', 'dynamic-features'];
+        if (!HIGH_VALUE.includes(section)) return;
+        this._visitedMilestones.add(section);
+    }
+
+    _fetchGitHubStars() {
+        const cached = sessionStorage.getItem('pbip-doc-gh-stars');
+        if (cached) { this._renderStars(parseInt(cached, 10)); return; }
+        fetch('https://api.github.com/repos/bredeespelid/PBIP_SemLin')
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (data && typeof data.stargazers_count === 'number') {
+                    sessionStorage.setItem('pbip-doc-gh-stars', String(data.stargazers_count));
+                    this._renderStars(data.stargazers_count);
+                }
+            })
+            .catch(() => {}); // Silently fail
+    }
+
+    _renderStars(count) {
+        if (count < 1) return;
+        const el = document.getElementById('githubStars');
+        const countEl = document.getElementById('githubStarCount');
+        if (el && countEl) {
+            countEl.textContent = count;
+            el.classList.remove('hidden');
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // FILE SYSTEM ACCESS
+    // ──────────────────────────────────────────────
+
+    async openFolder() {
+        const btn = document.getElementById('openFolderBtn') || document.getElementById('changeFolderBtn');
+        const originalText = btn ? btn.textContent : null;
+        if (btn) {
+            btn.textContent = 'Reading files...';
+            btn.disabled = true;
+        }
+        try {
+            this.folderHandle = await window.showDirectoryPicker({
+                mode: 'read',
+                startIn: 'documents'
+            });
+
+            // Find SemanticModel and Report folders
+            const result = await this.findPBIPStructure();
+
+            if (result.needsDiscovery) {
+                // Multiple models/reports found — show discovery panel
+                this.showDiscoveryPanel(result.models, result.reports);
+            } else {
+                // Single model found — proceed directly
+                this._proceedAfterSelection();
+            }
+
+        } catch (error) {
+            if (error.name === 'AbortError') return; // User cancelled
+            this.showToast(error.message, 'error');
+            console.error('Error opening folder:', error);
+        } finally {
+            if (btn && originalText !== null) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+    }
+
+    async findPBIPStructure() {
+        this.semanticModelHandle = null;
+        this.reportHandle = null;
+
+        // Check if selected folder IS a .SemanticModel folder
+        if (this.folderHandle.name.endsWith('.SemanticModel')) {
+            this.semanticModelHandle = this.folderHandle;
+            return { needsDiscovery: false };
+        }
+
+        // Check if selected folder contains definition/ directly (is a SemanticModel)
+        try {
+            await this.folderHandle.getDirectoryHandle('definition');
+            const def = await this.folderHandle.getDirectoryHandle('definition');
+            await def.getDirectoryHandle('tables');
+            this.semanticModelHandle = this.folderHandle;
+            return { needsDiscovery: false };
+        } catch {
+            // Not a direct semantic model folder, scan children
+        }
+
+        // Scan ALL children for .SemanticModel and .Report subfolders
+        const allModels = [];
+        const allReports = [];
+
+        for await (const entry of this.folderHandle.values()) {
+            if (entry.kind === 'directory') {
+                if (entry.name.endsWith('.SemanticModel')) {
+                    allModels.push(entry);
+                } else if (entry.name.endsWith('.Report')) {
+                    allReports.push(entry);
+                }
+            }
+        }
+
+        if (allModels.length === 0) {
+            throw new Error(
+                'No semantic model found.\n\n' +
+                'Please select a project folder containing a .SemanticModel subfolder,\n' +
+                'or select the .SemanticModel folder directly.'
+            );
+        }
+
+        // If exactly one model, auto-select it
+        if (allModels.length === 1) {
+            this.semanticModelHandle = allModels[0];
+            const modelPrefix = allModels[0].name.replace('.SemanticModel', '');
+            const matchingReports = allReports.filter(r => r.name.startsWith(modelPrefix));
+
+            if (matchingReports.length <= 1) {
+                // 0 or 1 matching report — auto-proceed without discovery
+                this.reportHandle = matchingReports[0] || null;
+                return { needsDiscovery: false };
+            }
+            // Multiple matching reports — show discovery so user can pick
+        }
+
+        // Multiple models or multiple matching reports — show discovery
+        return { needsDiscovery: true, models: allModels, reports: allReports };
+    }
+
+    showDiscoveryPanel(models, reports) {
+        document.getElementById('landingSection').classList.add('hidden');
+        document.getElementById('discoveryPanel').classList.remove('hidden');
+        document.getElementById('folderInfo').classList.add('hidden');
+
+        // Render model checkboxes
+        const modelList = document.getElementById('discoveryModelList');
+        modelList.innerHTML = '';
+        for (let i = 0; i < models.length; i++) {
+            const item = document.createElement('label');
+            item.className = 'discovery-item' + (i === 0 ? ' selected' : '');
+            item.innerHTML = `<input type="radio" name="discovery-model" value="${i}" ${i === 0 ? 'checked' : ''}>
+                <span class="discovery-item-name">${this._esc(models[i].name.replace('.SemanticModel', ''))}</span>
+                <span class="discovery-item-type">.SemanticModel</span>`;
+            item.querySelector('input').addEventListener('change', () => {
+                modelList.querySelectorAll('.discovery-item').forEach(el => el.classList.remove('selected'));
+                item.classList.add('selected');
+                this._updateDiscoveryReports(models, reports);
+            });
+            modelList.appendChild(item);
+        }
+
+        // Render report checkboxes
+        this._updateDiscoveryReports(models, reports);
+
+        // Bind continue button
+        const continueBtn = document.getElementById('discoveryContinueBtn');
+        const cancelBtn = document.getElementById('discoveryCancelBtn');
+
+        // Remove old listeners by replacing elements
+        const newContinueBtn = continueBtn.cloneNode(true);
+        continueBtn.parentNode.replaceChild(newContinueBtn, continueBtn);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+
+        newContinueBtn.addEventListener('click', () => {
+            // Get selected model
+            const selectedModelIdx = modelList.querySelector('input:checked')?.value;
+            if (selectedModelIdx == null) {
+                this.showToast('Please select a semantic model', 'error');
+                return;
+            }
+            this.semanticModelHandle = models[parseInt(selectedModelIdx)];
+
+            // Get selected report(s)
+            const reportList = document.getElementById('discoveryReportList');
+            const checkedReports = reportList.querySelectorAll('input:checked');
+            if (checkedReports.length > 0) {
+                this.reportHandle = reports[parseInt(checkedReports[0].value)];
+            } else {
+                this.reportHandle = null;
+            }
+
+            document.getElementById('discoveryPanel').classList.add('hidden');
+            this._proceedAfterSelection();
+        });
+
+        newCancelBtn.addEventListener('click', () => {
+            document.getElementById('discoveryPanel').classList.add('hidden');
+            document.getElementById('landingSection').classList.remove('hidden');
+        });
+    }
+
+    _updateDiscoveryReports(models, reports) {
+        const modelList = document.getElementById('discoveryModelList');
+        const reportList = document.getElementById('discoveryReportList');
+        const reportHint = document.getElementById('discoveryReportHint');
+
+        const selectedModelIdx = parseInt(modelList.querySelector('input:checked')?.value || '0');
+        const selectedModel = models[selectedModelIdx];
+        const modelPrefix = selectedModel.name.replace('.SemanticModel', '');
+
+        reportList.innerHTML = '';
+
+        if (reports.length === 0) {
+            reportHint.textContent = 'No report folders found. Visual usage data will not be available.';
+            return;
+        }
+
+        // Filter to only show reports related to the selected model
+        const matchingReports = [];
+        for (let i = 0; i < reports.length; i++) {
+            if (reports[i].name.startsWith(modelPrefix)) {
+                matchingReports.push({ report: reports[i], originalIndex: i });
+            }
+        }
+
+        if (matchingReports.length === 0) {
+            reportHint.textContent = 'No related report folders found for this semantic model.';
+            return;
+        }
+
+        reportHint.textContent = matchingReports.length === 1
+            ? 'Related report folder will be included.'
+            : 'Select which related report folders to include.';
+
+        for (const { report, originalIndex } of matchingReports) {
+            const item = document.createElement('label');
+            item.className = 'discovery-item selected';
+            item.innerHTML = `<input type="checkbox" name="discovery-report" value="${originalIndex}" checked>
+                <span class="discovery-item-name">${this._esc(report.name.replace('.Report', ''))}</span>
+                <span class="discovery-item-type">.Report</span>`;
+            item.querySelector('input').addEventListener('change', (e) => {
+                item.classList.toggle('selected', e.target.checked);
+            });
+            reportList.appendChild(item);
+        }
+    }
+
+    _proceedAfterSelection() {
+        document.getElementById('landingSection').classList.add('hidden');
+        document.getElementById('discoveryPanel').classList.add('hidden');
+        document.getElementById('folderInfo').classList.remove('hidden');
+        document.getElementById('folderName').textContent = this.folderHandle.name;
+        this.parseModel();
+    }
+
+    // ──────────────────────────────────────────────
+    // STATE RESET
+    // ──────────────────────────────────────────────
+
+    _resetState() {
+        // Lazy-render flags
+        this._diagramRendered = false;
+        this._detailedERDRendered = false;
+        this._lineageRendered = false;
+        this._fieldDiagramRendered = false;
+        this._bpaRendered = false;
+        this.bpaResults = null;
+
+        // Reset per-dataset milestone tracking so sponsor prompts re-fire on each new model (S8)
+        this._visitedMilestones = new Set();
+        this._dynamicPromptShown = false;
+        this._milestoneDismissed = false;
+
+        // Clear all diagram containers so previous dataset SVGs don't linger,
+        // but preserve the static .diagram-controls toolbar that lives inside.
+        const DIAGRAM_CONTAINERS = [
+            'relationshipsDiagram', 'detailedERDContainer',
+            'lineageDiagramContainer', 'lineageTraceDiagram',
+            'lineageImpactDiagram', 'lineageColumnImpactDiagram',
+            'lineageSourceTraceDiagram', 'visualUsageByField',
+            'visualUsageByVisual'
+        ];
+        for (const id of DIAGRAM_CONTAINERS) {
+            const el = document.getElementById(id);
+            if (!el) continue;
+            Array.from(el.children).forEach(child => {
+                if (!child.classList.contains('diagram-controls')) child.remove();
+            });
+        }
+
+        // Clear lineage select options so they repopulate for the new dataset
+        for (const id of ['lineageVisualSelect', 'lineageMeasureSelect', 'lineageTableSelect', 'lineageColumnSelect', 'lineagePhysicalTableSelect']) {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = '';
+        }
+
+        // Hide warning banner (will be shown again if new parse has errors)
+        const banner = document.getElementById('warningBanner');
+        if (banner) banner.classList.add('hidden');
+
+        // Remove any milestone banners prepended during previous parse
+        document.querySelectorAll('#mainContent .milestone-banner').forEach(b => b.remove());
+
+        // Clear sidebar search input
+        const searchInput = document.getElementById('sidebarSearch');
+        if (searchInput) searchInput.value = '';
+
+        // Null out static M-parser cache so it doesn't bleed across datasets
+        if (typeof MExpressionParser !== 'undefined') MExpressionParser._declaredParams = null;
+    }
+
+    // ──────────────────────────────────────────────
+    // PARSING
+    // ──────────────────────────────────────────────
+
+    async parseModel() {
+        this._resetState();
+        this.showLoading(true, 'Reading TMDL files...');
+
+        try {
+            // Read all TMDL files
+            const files = await this.readAllTMDLFiles();
+            const tableCount = Object.keys(files).filter(f => f.startsWith('tables/')).length;
+            this.showLoading(true, `Parsing ${tableCount} table${tableCount !== 1 ? 's' : ''}...`);
+
+            // Parse TMDL
+            const parser = new TMDLParser();
+            this.parsedModel = parser.parseAll(files);
+            this.parseErrors = parser.errors;
+
+            // Extract DAX references
+            this.measureRefs = parser.extractAllReferences();
+
+            // Parse visuals if report folder exists
+            this.visualData = null;
+            if (this.reportHandle) {
+                try {
+                    const reportPages = await this.readReportFiles();
+                    const visualParser = new VisualParser();
+                    this.visualData = visualParser.parseReport(reportPages);
+                } catch (err) {
+                    console.warn('Could not parse report visuals:', err);
+                }
+            }
+
+            // Build lineage engine
+            this.lineageEngine = new LineageEngine(
+                this.parsedModel,
+                this.visualData,
+                this.measureRefs
+            );
+            this.lineageEngine.buildGraph();
+            this._bindTraceButtonDelegation();
+
+            // Create doc generator
+            this.docGenerator = new DocGenerator(
+                this.parsedModel,
+                this.visualData?.fieldUsageMap || {},
+                this.measureRefs,
+                this.lineageEngine
+            );
+
+            // Run Best Practice Analyzer (BPA)
+            this.bpaResults = BPAEngine.evaluate(this.parsedModel);
+
+            // Update UI
+            this.updateStats();
+            this.buildSidebar();
+            this.renderOverview();
+            this._navigateByPersona();
+            this.showSection('overview');
+
+            this._track('Model Parsed', { tables: this.parsedModel.tables.length, measures: this.parsedModel.tables.reduce((s, t) => s + t.measures.length, 0) });
+
+            document.getElementById('statsBar').classList.remove('hidden');
+            document.getElementById('downloadBar').classList.remove('hidden');
+            document.getElementById('appBody').classList.remove('hidden');
+
+            // Time-saved calculator in download bar
+            this._showTimeSaved();
+
+            // Show warning banner if there were parse errors
+            if (this.parseErrors.length > 0) {
+                const banner = document.getElementById('warningBanner');
+                document.getElementById('warningBannerText').textContent =
+                    `Parsed with ${this.parseErrors.length} warning${this.parseErrors.length !== 1 ? 's' : ''} — some items may be incomplete`;
+                banner.classList.remove('hidden');
+            }
+
+        } catch (error) {
+            this.parseErrors.push({ file: 'general', line: null, message: error.message });
+            this.showToast('Error parsing model: ' + error.message, 'error');
+            console.error('Parse error:', error);
+        } finally {
+            this.showLoading(false, 'Parsing TMDL files...');
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // DEMO / SAMPLE DATA MODE
+    // ──────────────────────────────────────────────
+
+    exportSampleData() {
+        if (!this.parsedModel) {
+            this.showToast('Open a PBIP folder first, then export.', 'error');
+            return;
+        }
+        const modelName = this.parsedModel.database?.name || this.parsedModel.model?.name || 'sample';
+        const totalMeasures = this.parsedModel.tables.reduce((s, t) => s + t.measures.length, 0);
+        const totalVisuals = this.visualData?.visuals?.length || 0;
+
+        const output = JSON.stringify({
+            parsedModel: this.parsedModel,
+            measureRefs: this.measureRefs || {},
+            visualData: this.visualData || null,
+            fieldUsageMap: this.visualData?.fieldUsageMap || {},
+            _meta: {
+                exportedAt: new Date().toISOString(),
+                modelName,
+                tables: this.parsedModel.tables.length,
+                measures: totalMeasures,
+                visuals: totalVisuals,
+                note: 'Pre-parsed demo data for pbip-documenter sample mode'
+            }
+        }, null, 2);
+
+        const blob = new Blob([output], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'contoso.json';
+        a.click();
+        URL.revokeObjectURL(a.href);
+
+        this.showToast(`Downloaded contoso.json — place it in the samples/ folder to enable demo mode.`, 'success');
+    }
+
+    async loadSampleData() {
+        const btn = document.getElementById('btnSampleData');
+        const origLabel = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle">hourglass_top</span> Loading sample…';
+        }
+
+        try {
+            this._resetState();
+            // Clear file handles from a prior real-folder session
+            this.folderHandle = null;
+            this.semanticModelHandle = null;
+            this.reportHandle = null;
+
+            const resp = await fetch('samples/contoso.json');
+            if (!resp.ok) {
+                throw new Error(
+                    `Sample data not found. To set it up: open your Contoso PBIP folder normally, ` +
+                    `then click "Export as demo data" in the download bar to download contoso.json, ` +
+                    `and place it in the samples/ folder.`
+                );
+            }
+            const data = await resp.json();
+
+            // Inject parsed data
+            this.parsedModel = data.parsedModel;
+            this.measureRefs = data.measureRefs || {};
+            this.visualData = data.visualData || null;
+            this.parseErrors = [];
+
+            // Build lineage engine
+            this.lineageEngine = new LineageEngine(
+                this.parsedModel,
+                this.visualData,
+                this.measureRefs
+            );
+            this.lineageEngine.buildGraph();
+            this._bindTraceButtonDelegation();
+
+            // Create doc generator
+            this.docGenerator = new DocGenerator(
+                this.parsedModel,
+                this.visualData?.fieldUsageMap || data.fieldUsageMap || {},
+                this.measureRefs,
+                this.lineageEngine
+            );
+
+            // Run Best Practice Analyzer (BPA)
+            this.bpaResults = BPAEngine.evaluate(this.parsedModel);
+
+            // Update UI
+            this.updateStats();
+            this.buildSidebar();
+            this.renderOverview();
+            this.showSection('overview');
+
+            this._track('Demo Loaded');
+
+            document.getElementById('landingSection').classList.add('hidden');
+            document.getElementById('statsBar').classList.remove('hidden');
+            document.getElementById('downloadBar').classList.remove('hidden');
+            document.getElementById('appBody').classList.remove('hidden');
+
+            // Show folder info with demo label
+            document.getElementById('folderInfo').classList.remove('hidden');
+            const folderNameEl = document.getElementById('folderName');
+            if (folderNameEl) folderNameEl.textContent = data._meta?.modelName || 'Contoso (demo)';
+
+            // Time-saved calculator in download bar
+            this._showTimeSaved();
+
+        } catch (err) {
+            const msg = err.name === 'TypeError' && err.message.includes('fetch')
+                ? 'Sample data not ready. Open your Contoso folder → click "Export as demo data" in the download bar → save as samples/contoso.json.'
+                : 'Could not load sample data: ' + err.message;
+            this.showToast(msg, 'error');
+            console.error('loadSampleData error:', err);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = origLabel;
+            }
+        }
+    }
+
+    async readAllTMDLFiles() {
+        const files = {};
+        const defHandle = await this.semanticModelHandle.getDirectoryHandle('definition');
+
+        // Read top-level files
+        for await (const entry of defHandle.values()) {
+            if (entry.kind === 'file' && entry.name.endsWith('.tmdl')) {
+                files[entry.name] = await this.readFile(entry);
+            }
+        }
+
+        // Read tables/*.tmdl
+        try {
+            const tablesHandle = await defHandle.getDirectoryHandle('tables');
+            for await (const entry of tablesHandle.values()) {
+                if (entry.kind === 'file' && entry.name.endsWith('.tmdl')) {
+                    files[`tables/${entry.name}`] = await this.readFile(entry);
+                }
+            }
+        } catch {
+            console.warn('No tables folder found');
+        }
+
+        // Read roles/*.tmdl
+        try {
+            const rolesHandle = await defHandle.getDirectoryHandle('roles');
+            for await (const entry of rolesHandle.values()) {
+                if (entry.kind === 'file' && entry.name.endsWith('.tmdl')) {
+                    files[`roles/${entry.name}`] = await this.readFile(entry);
+                }
+            }
+        } catch {
+            // roles/ is optional
+        }
+
+        return files;
+    }
+
+    async readReportFiles() {
+        const pages = [];
+        let defHandle;
+
+        try {
+            defHandle = await this.reportHandle.getDirectoryHandle('definition');
+        } catch {
+            return pages;
+        }
+
+        let pagesHandle;
+        try {
+            pagesHandle = await defHandle.getDirectoryHandle('pages');
+        } catch {
+            return pages;
+        }
+
+        for await (const pageEntry of pagesHandle.values()) {
+            if (pageEntry.kind !== 'directory') continue;
+
+            let pageName = pageEntry.name;
+            let displayName = pageEntry.name;
+
+            // Try reading page.json for display name and dimensions
+            let pageWidth = null;
+            let pageHeight = null;
+            let pageBinding = null;
+            try {
+                const pageJsonHandle = await pageEntry.getFileHandle('page.json');
+                const pageContent = await this.readFile(pageJsonHandle);
+                const pageData = JSON.parse(pageContent);
+                displayName = pageData.displayName || pageData.name || pageEntry.name;
+                pageName = pageData.name || pageEntry.name;
+                pageWidth = pageData.width || null;
+                pageHeight = pageData.height || null;
+                pageBinding = pageData.pageBinding || null;
+            } catch {
+                // OK, use folder name
+            }
+
+            const visuals = [];
+
+            // Read visuals
+            try {
+                const visualsHandle = await pageEntry.getDirectoryHandle('visuals');
+                for await (const visualEntry of visualsHandle.values()) {
+                    if (visualEntry.kind !== 'directory') continue;
+
+                    try {
+                        const visualJsonHandle = await visualEntry.getFileHandle('visual.json');
+                        const visualContent = await this.readFile(visualJsonHandle);
+                        const visualData = JSON.parse(visualContent);
+                        visuals.push({
+                            visualId: visualEntry.name,
+                            visualData
+                        });
+                    } catch {
+                        // Skip visuals without visual.json
+                    }
+                }
+            } catch {
+                // No visuals folder
+            }
+
+            pages.push({
+                pageId: pageEntry.name,
+                pageName,
+                displayName,
+                pageWidth,
+                pageHeight,
+                pageBinding,
+                visuals
+            });
+        }
+
+        return pages;
+    }
+
+    async readFile(fileHandle) {
+        const file = await fileHandle.getFile();
+        return await file.text();
+    }
+
+    // ──────────────────────────────────────────────
+    // UI UPDATES
+    // ──────────────────────────────────────────────
+
+    updateStats() {
+        const m = this.parsedModel;
+        const totalColumns = m.tables.reduce((sum, t) => sum + t.columns.length, 0);
+        const totalMeasures = m.tables.reduce((sum, t) => sum + t.measures.length, 0);
+        const totalVisuals = this.visualData ? this.visualData.visuals.length : 0;
+
+        document.getElementById('statTables').textContent = m.tables.length;
+        document.getElementById('statColumns').textContent = totalColumns;
+        document.getElementById('statMeasures').textContent = totalMeasures;
+        document.getElementById('statRelationships').textContent = m.relationships.length;
+        const visualCounts = this._countDataBoundVisuals();
+        document.getElementById('statVisuals').textContent = visualCounts.dataBound;
+
+        // Data sources count
+        const totalDataSources = this.lineageEngine ? this.lineageEngine.getAllDataSources().length : 0;
+        document.getElementById('statDataSources').textContent = totalDataSources;
+
+        // Visuals hint and dimmed state
+        const visualsCard = document.getElementById('statVisualsCard');
+        const visualsHint = document.getElementById('statVisualsHint');
+        if (!this.reportHandle) {
+            visualsCard.classList.add('dimmed');
+            visualsHint.textContent = 'No .Report folder found';
+        } else if (visualCounts.total === 0) {
+            visualsCard.classList.remove('dimmed');
+            visualsHint.textContent = 'No visuals detected';
+        } else {
+            visualsCard.classList.remove('dimmed');
+            visualsHint.textContent = visualCounts.decoration > 0
+                ? `+ ${visualCounts.decoration} decoration (buttons/shapes)`
+                : '';
+        }
+    }
+
+    buildSidebar() {
+        const m = this.parsedModel;
+        const totalMeasures = m.tables.reduce((sum, t) => sum + t.measures.length, 0);
+
+        document.getElementById('sidebarTableCount').textContent = m.tables.length;
+        document.getElementById('sidebarMeasureCount').textContent = totalMeasures;
+        document.getElementById('sidebarRelCount').textContent = m.relationships.length;
+        document.getElementById('sidebarRoleCount').textContent = m.roles.length;
+
+        // Update BPA badge in sidebar
+        const bpaBadge = document.getElementById('sidebarBpaBadge');
+        if (bpaBadge) {
+            const findingsCount = this.bpaResults?.findings?.length || 0;
+            bpaBadge.textContent = findingsCount;
+            if (findingsCount > 0) {
+                bpaBadge.classList.remove('hidden');
+            } else {
+                bpaBadge.classList.add('hidden');
+            }
+        }
+
+        // Report Pages list
+        const pageSectionEl = document.getElementById('sidebarReportPagesSection');
+        if (this.visualData && this.visualData.pages.length > 0) {
+            pageSectionEl.classList.remove('hidden');
+            document.getElementById('sidebarPageCount').textContent = this.visualData.pages.length;
+            const pageList = document.getElementById('sidebarPageList');
+            pageList.innerHTML = this.visualData.pages
+                .map(p => `<div class="sidebar-item" data-page-id="${this._esc(p.id)}">${this._esc(p.displayName)}</div>`)
+                .join('');
+        } else {
+            pageSectionEl.classList.add('hidden');
+        }
+
+        // Table list (chunked rendering: first 50 immediately, rest on demand)
+        const SIDEBAR_INITIAL_BATCH = 50;
+        const tableList = document.getElementById('sidebarTableList');
+        const tables = m.tables;
+        if (tables.length > SIDEBAR_INITIAL_BATCH) {
+            this._remainingSidebarTables = tables.slice(SIDEBAR_INITIAL_BATCH);
+            tableList.innerHTML = tables.slice(0, SIDEBAR_INITIAL_BATCH)
+                .map(t => `<div class="sidebar-item" data-table="${this._esc(t.name)}">${this._esc(t.name)}</div>`)
+                .join('') +
+                `<button class="btn-sidebar-load-more">Show ${this._remainingSidebarTables.length} more tables</button>`;
+        } else {
+            this._remainingSidebarTables = null;
+            tableList.innerHTML = tables
+                .map(t => `<div class="sidebar-item" data-table="${this._esc(t.name)}">${this._esc(t.name)}</div>`)
+                .join('');
+        }
+
+        // Collapse/expand table list based on saved state or table count
+        const tablesSection = tableList.closest('.sidebar-section');
+        const chevron = tablesSection.querySelector('.sidebar-chevron');
+        let savedState = null;
+        try { savedState = localStorage.getItem('pbip-doc-sidebar-tables-collapsed'); } catch {}
+        let shouldCollapse;
+        if (savedState !== null) {
+            shouldCollapse = savedState === 'true';
+        } else {
+            shouldCollapse = m.tables.length > 10;
+        }
+        tablesSection.classList.toggle('collapsed', shouldCollapse);
+        if (chevron) {
+            chevron.setAttribute('aria-expanded', String(!shouldCollapse));
+        }
+
+        // Show/hide sections
+        document.getElementById('sidebarRolesSection').classList.toggle('hidden', m.roles.length === 0);
+        document.getElementById('sidebarExpressionsSection').classList.toggle('hidden', m.expressions.length === 0);
+        document.getElementById('sidebarVisualUsageSection').classList.toggle('hidden', !this.visualData);
+
+        // Lineage & data sources sections
+        const dataSources = this.lineageEngine ? this.lineageEngine.getAllDataSources() : [];
+        document.getElementById('sidebarLineageSection').classList.toggle('hidden', !this.lineageEngine);
+        document.getElementById('sidebarDataSourcesSection').classList.toggle('hidden', dataSources.length === 0);
+        document.getElementById('sidebarDataSourceCount').textContent = dataSources.length;
+
+        // Dynamic features section
+        const dynamicSummary = this._getDynamicFeaturesSummary();
+        document.getElementById('sidebarDynamicSection').classList.toggle('hidden', dynamicSummary.total === 0);
+        document.getElementById('sidebarDynamicCount').textContent = dynamicSummary.total;
+    }
+
+    filterSidebar(query) {
+        const q = query.trim().toLowerCase();
+        const clearBtn = document.getElementById('sidebarSearchClear');
+        const countEl = document.getElementById('sidebarSearchCount');
+
+        clearBtn.classList.toggle('hidden', q === '');
+
+        if (!this.parsedModel || q === '') {
+            // Reset: show all items
+            document.querySelectorAll('.sidebar-item').forEach(item => item.classList.remove('search-hidden'));
+            countEl.classList.add('hidden');
+            return;
+        }
+
+        // Force-load remaining tables before searching (ensures all items are in DOM)
+        if (this._remainingSidebarTables) {
+            const tableList = document.getElementById('sidebarTableList');
+            const loadMoreBtn = tableList.querySelector('.btn-sidebar-load-more');
+            const html = this._remainingSidebarTables
+                .map(t => `<div class="sidebar-item" data-table="${this._esc(t.name)}">${this._esc(t.name)}</div>`)
+                .join('');
+            if (loadMoreBtn) {
+                loadMoreBtn.insertAdjacentHTML('beforebegin', html);
+                loadMoreBtn.remove();
+            }
+            this._remainingSidebarTables = null;
+        }
+
+        // Build measure lookup (table sidebar items that have matching measures)
+        const measureMatchTables = new Set();
+        for (const table of this.parsedModel.tables) {
+            for (const measure of table.measures) {
+                if (measure.name.toLowerCase().includes(q) ||
+                    (measure.description && measure.description.toLowerCase().includes(q))) {
+                    measureMatchTables.add(table.name);
+                }
+            }
+        }
+
+        let shown = 0;
+        let total = 0;
+        const tableList = document.getElementById('sidebarTableList');
+        tableList.querySelectorAll('.sidebar-item').forEach(item => {
+            total++;
+            const tableName = (item.dataset.table || '').toLowerCase();
+            const match = tableName.includes(q) || measureMatchTables.has(item.dataset.table);
+            item.classList.toggle('search-hidden', !match);
+            if (match) shown++;
+        });
+
+        // Also filter report pages
+        const pageList = document.getElementById('sidebarPageList');
+        pageList.querySelectorAll('.sidebar-item').forEach(item => {
+            const pageName = (item.textContent || '').toLowerCase();
+            item.classList.toggle('search-hidden', !pageName.includes(q));
+        });
+
+        // Auto-expand tables section when searching
+        if (q) {
+            const tablesSection = tableList.closest('.sidebar-section');
+            tablesSection.classList.remove('collapsed');
+            const chevron = tablesSection.querySelector('.sidebar-chevron');
+            if (chevron) chevron.setAttribute('aria-expanded', 'true');
+        }
+
+        countEl.textContent = `Showing ${shown} of ${total} tables`;
+        countEl.classList.remove('hidden');
+    }
+
+    showSection(section) {
+        // Hide all section views
+        document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
+
+        // Show target section
+        const viewId = `view-${section}`;
+        const view = document.getElementById(viewId);
+        if (view) {
+            view.classList.add('active');
+        }
+
+        // Update sidebar active state
+        document.querySelectorAll('.sidebar-header').forEach(h => h.classList.remove('active'));
+        const header = document.querySelector(`.sidebar-header[data-section="${section}"]`);
+        if (header) header.classList.add('active');
+
+        document.querySelectorAll('.sidebar-item').forEach(item => item.classList.remove('active'));
+
+        // Render content on demand
+        if (section === 'bpa' && !this._bpaRendered) {
+            this._bpaRendered = true;
+            this.renderBPA();
+        }
+        if (section === 'report-pages') this.renderReportPagesOverview();
+        if (section === 'tables') this.renderTables();
+        if (section === 'measures') this.renderMeasureCatalog();
+        if (section === 'relationships' && !this._diagramRendered) {
+            this._diagramRendered = true;
+            const diagEl = document.getElementById('relationshipsDiagram');
+            if (diagEl) diagEl.innerHTML = '<div class="loading"><div class="spinner"></div>Building diagram…</div>';
+            requestAnimationFrame(() => requestAnimationFrame(() => this.renderRelationshipDiagram()));
+        }
+        if (section === 'roles') this.renderRoles();
+        if (section === 'expressions') this.renderExpressions();
+        if (section === 'visual-usage') this.renderVisualUsageView();
+        if (section === 'lineage') this.renderLineageView();
+        if (section === 'data-sources') this.renderDataSourcesView();
+        if (section === 'dynamic-features') this.renderDynamicFeaturesView();
+
+        // Milestone tracking for sponsor prompt
+        this._trackMilestone(section);
+        this._track('Section Visited', { section });
+    }
+
+    showTableDetail(tableName) {
+        const table = this.parsedModel.tables.find(t => t.name === tableName);
+        if (!table) return;
+
+        // Milestone tracking
+        this._trackMilestone('table-detail');
+
+        // Update sidebar active
+        document.querySelectorAll('.sidebar-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.table === tableName);
+        });
+
+        // Show detail view
+        document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
+        document.getElementById('view-table-detail').classList.add('active');
+        document.getElementById('tableDetailName').textContent = table.name;
+
+        // Add breadcrumb back link
+        const breadcrumb = document.getElementById('tableDetailBreadcrumb');
+        if (breadcrumb) {
+            breadcrumb.innerHTML = `<a href="#" class="breadcrumb-link" data-section="tables">← Tables</a>`;
+            breadcrumb.querySelector('.breadcrumb-link').addEventListener('click', (e) => {
+                e.preventDefault();
+                this.showSection('tables');
+            });
+        }
+
+        const content = document.getElementById('tableDetailContent');
+        let html = '';
+
+        if (table.description) {
+            html += `<div class="description-quote">${this._esc(table.description)}</div>`;
+        }
+
+        if (table.isHidden) {
+            html += `<p><span class="badge badge-hidden">Hidden Table</span></p>`;
+        }
+
+        // Field Parameter detection
+        if (this.docGenerator) {
+            const fpItems = this.docGenerator._getFieldParameterItems(table.name);
+            if (fpItems !== null) {
+                html += `<p><span class="badge badge-field-param">Field Parameter</span> This table is a dynamic field selector.</p>`;
+                if (fpItems.length > 0) {
+                    html += `<div class="fp-items-container"><strong>Available fields (${fpItems.length}):</strong><div class="fp-items-list">`;
+                    for (const item of fpItems) {
+                        html += `<span class="fp-item-chip">'${this._esc(item.table)}'[${this._esc(item.column)}]</span>`;
+                    }
+                    html += `</div></div>`;
+                }
+            }
+        }
+
+        // Calculation Group
+        if (table.calculationGroup && table.calculationGroup.items.length > 0) {
+            html += `<h3>Calculation Group <span class="badge badge-calc">Calc Group</span></h3>`;
+            html += `<p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">${table.calculationGroup.items.length} calculation item(s)</p>`;
+            for (const item of table.calculationGroup.items) {
+                html += `<div class="calc-item-card">
+                    <h4>${this._esc(item.name)} <span class="badge badge-calc">Calc Item</span></h4>`;
+                if (item.expression) {
+                    const lines = item.expression.split('\n');
+                    const shouldTruncate = lines.length > 5;
+                    const daxId = `dax-${Math.random().toString(36).substr(2, 9)}`;
+                    html += `<details><summary>Expression</summary>` +
+                        `<div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${daxId}">${this._esc(item.expression)}</div>` +
+                        (shouldTruncate ? `<button type="button" class="btn-dax-toggle" data-target="${daxId}">Show more</button>` : '') +
+                        `</details>`;
+                }
+                html += `</div>`;
+            }
+        }
+
+        // Source connection info
+        if (this.lineageEngine) {
+            const allSources = this.lineageEngine.getAllDataSources();
+            const tableSourceRows = [];
+            for (const src of allSources) {
+                const sid = `source:${MExpressionParser._sourceKey(src)}`;
+                const consumers = this.lineageEngine.getDataSourceConsumers(sid);
+                const te = consumers.tables.find(t => t.name === tableName);
+                if (te) tableSourceRows.push({ src, te });
+            }
+            if (tableSourceRows.length > 0) {
+                html += `<h3>Data Source</h3>`;
+                for (const { src, te } of tableSourceRows) {
+                    const server = src.serverResolved || src.server || '';
+                    const db = src.databaseResolved || src.database || '';
+                    const physLabel = [te.physicalSchema, te.physicalTable].filter(Boolean).join('.');
+                    const gwBadge = src.gatewayRequired === true ? '<span class="badge" style="background:#ffebee;color:#c62828;margin-left:4px">Gateway Required</span>' : '';
+                    const paramBadge = src.parameterized ? '<span class="badge badge-field-param" style="margin-left:4px">Parameterized</span>' : '';
+                    html += `<div class="table-source-panel">
+                        <div class="source-meta-row">
+                            <span class="lineage-badge source">${this._esc(src.type)}</span>`;
+                    if (server) html += ` <code>${this._esc(server)}</code>`;
+                    if (db) html += ` <span style="color:var(--text-secondary)">/</span> <code>${this._esc(db)}</code>`;
+                    if (src.url) html += ` <code>${this._esc(src.url)}</code>`;
+                    if (src.path) html += ` <code>${this._esc(src.path)}</code>`;
+                    html += `${paramBadge}${gwBadge}
+                        </div>`;
+                    if (physLabel) {
+                        html += `<div class="source-meta-row" style="margin-top:6px">
+                            Physical table: <button type="button" class="ds-phys-label" title="Trace to visuals" onclick="app._tracePhysicalTable(${JSON.stringify(te.physicalSchema||'')}, ${JSON.stringify(te.physicalTable||'')})">${this._esc(physLabel)} <span style="font-size:10px;opacity:0.7">↗</span></button>
+                        </div>`;
+                    }
+                    if (te.renames && te.renames.length > 0) {
+                        html += `<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer">${te.renames.length} column rename${te.renames.length !== 1 ? 's' : ''}</summary><ul style="font-size:12px;margin:4px 0 0 16px">`;
+                        for (const r of te.renames) {
+                            html += `<li><code>${this._esc(r.sourceName)}</code> → <code>${this._esc(r.modelName)}</code></li>`;
+                        }
+                        html += `</ul></details>`;
+                    }
+                    html += `</div>`;
+                }
+            }
+        }
+
+        // Columns
+        if (table.columns.length > 0) {
+            html += `<h3>Columns (${table.columns.length})</h3>`;
+            html += `<table><tr><th>Column</th><th>Data Type</th><th>Description</th><th>Format</th><th>Status</th></tr>`;
+            for (const col of table.columns) {
+                html += `<tr>
+                    <td>${this._esc(col.name)}</td>
+                    <td>${col.dataType || ''}</td>
+                    <td>${this._esc(col.description || '')}</td>
+                    <td style="font-family:monospace;font-size:12px">${this._esc(col.formatString || '')}</td>
+                    <td>${col.isHidden ? '<span class="badge badge-hidden">Hidden</span>' : ''}</td>
+                </tr>`;
+            }
+            html += '</table>';
+        }
+
+        // Measures
+        if (table.measures.length > 0) {
+            const MEASURES_INITIAL_BATCH = 20;
+            html += `<h3>Measures (${table.measures.length})</h3>`;
+            const initialMeasures = table.measures.slice(0, MEASURES_INITIAL_BATCH);
+            for (const measure of initialMeasures) {
+                html += this._renderMeasureCard(measure, table.name);
+            }
+            if (table.measures.length > MEASURES_INITIAL_BATCH) {
+                const remaining = table.measures.length - MEASURES_INITIAL_BATCH;
+                html += `<button type="button" class="btn-load-more-measures" data-table="${this._esc(table.name)}">Load ${remaining} more measure${remaining !== 1 ? 's' : ''}</button>`;
+                this._remainingMeasures = { tableName: table.name, measures: table.measures.slice(MEASURES_INITIAL_BATCH) };
+            }
+        }
+
+        // Hierarchies
+        if (table.hierarchies.length > 0) {
+            html += `<h3>Hierarchies</h3>`;
+            for (const h of table.hierarchies) {
+                const levels = h.levels.map(l => l.name || l.column).join(' → ');
+                html += `<p><strong>${this._esc(h.name)}</strong>: ${levels}</p>`;
+            }
+        }
+
+        // Incremental Refresh Policy
+        if (table.refreshPolicy) {
+            const rp = table.refreshPolicy;
+            html += `<h3>Incremental Refresh <span class="badge" style="background:#e3f2fd;color:#1565c0">Policy</span></h3>`;
+            html += `<div class="table-source-panel" style="border-left-color:#1565c0">
+                <div class="source-meta-row">
+                    <span class="badge" style="background:#e3f2fd;color:#1565c0">${this._esc(rp.policyType || 'basic')}</span>`;
+            if (rp.rollingWindowPeriods != null && rp.rollingWindowGranularity) {
+                html += `<span>Rolling window: <strong>${rp.rollingWindowPeriods} ${this._esc(rp.rollingWindowGranularity)}${rp.rollingWindowPeriods !== 1 ? 's' : ''}</strong></span>`;
+            }
+            if (rp.incrementalPeriods != null && rp.incrementalGranularity) {
+                html += `<span>· Incremental: <strong>${rp.incrementalPeriods} ${this._esc(rp.incrementalGranularity)}${rp.incrementalPeriods !== 1 ? 's' : ''}</strong></span>`;
+            }
+            html += `</div>`;
+            if (rp.sourceExpression) {
+                const rpId = `rp-${Math.random().toString(36).substr(2, 9)}`;
+                const lines = rp.sourceExpression.split('\n');
+                const shouldTruncate = lines.length > 5;
+                html += `<details style="margin-top:8px"><summary style="font-size:12px;cursor:pointer">Source Expression (M)</summary>
+                    <div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${rpId}">${this._esc(rp.sourceExpression)}</div>
+                    ${shouldTruncate ? `<button type="button" class="btn-dax-toggle" data-target="${rpId}">Show more</button>` : ''}
+                </details>`;
+            }
+            html += `</div>`;
+        }
+
+        // M Steps — parsed Power Query steps
+        if (this.lineageEngine && this.lineageEngine.mSteps) {
+            const steps = this.lineageEngine.mSteps.get(tableName);
+            if (steps && steps.length > 0) {
+                html += `<h3>Power Query Steps (${steps.length})</h3>`;
+                html += `<ol class="m-steps-list">`;
+                for (const step of steps) {
+                    const kindClass = `m-step-kind-${step.kind.toLowerCase()}`;
+                    const truncated = step.exprText.length > 200 ? step.exprText.slice(0, 200) + '…' : step.exprText;
+                    html += `<li class="m-step-item">
+                        <span class="m-step-name">${this._esc(step.name)}</span>
+                        <span class="m-step-kind ${kindClass}">${this._esc(step.kind)}</span>
+                        <code class="m-step-expr">${this._esc(truncated)}</code>
+                    </li>`;
+                }
+                html += `</ol>`;
+            }
+        }
+
+        // Partitions
+        if (table.partitions.length > 0) {
+            html += `<h3>Partitions</h3>`;
+            for (const p of table.partitions) {
+                const stateLabel = p.lastRefreshState === 'Exception'
+                    ? `<span class="badge" style="background:#ffebee;color:#c62828;margin-left:8px">Last refresh: Exception</span>`
+                    : p.lastRefreshState ? `<span class="badge" style="background:#f1f8e9;color:#33691e;margin-left:8px">Last refresh: ${this._esc(p.lastRefreshState)}</span>` : '';
+                html += `<p><strong>${this._esc(p.name)}</strong> — mode: ${p.mode || 'default'}${stateLabel}</p>`;
+                if (p.source) {
+                    const lines = p.source.split('\n');
+                    const shouldTruncate = lines.length > 5;
+                    const daxId = `dax-${Math.random().toString(36).substr(2, 9)}`;
+                    html += `<div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${daxId}">${this._esc(p.source)}</div>`;
+                    if (shouldTruncate) html += `<button type="button" class="btn-dax-toggle" data-target="${daxId}">Show more</button>`;
+                }
+            }
+        }
+
+        content.innerHTML = html;
+        this._bindDaxToggles(content);
+    }
+
+    /**
+     * After a successful parse, navigate to the sidebar section most relevant
+     * to the persona the user selected on the landing page.
+     */
+    _navigateByPersona() {
+        const persona = this._activePersona || 'dev';
+        const sectionMap = {
+            dev:  'bpa',            // Land on Best Practice Analyzer (BPA) instead of Measure Catalog
+            data: 'data-sources',   // Data engineer → Data Sources
+            po:   'overview'        // Product owner → Model Overview
+        };
+        const target = sectionMap[persona] || 'overview';
+        // Only auto-navigate away from overview for non-default personas
+        if (target !== 'overview') {
+            // Defer slightly so overview renders first, then switch
+            setTimeout(() => this.showSection(target), 50);
+        }
+    }
+
+    renderOverview() {
+        const m = this.parsedModel;
+        const totalColumns = m.tables.reduce((sum, t) => sum + t.columns.length, 0);
+        const totalMeasures = m.tables.reduce((sum, t) => sum + t.measures.length, 0);
+
+        let html = '<table>';
+        html += '<tr><th>Property</th><th>Value</th></tr>';
+
+        if (m.database?.name) html += `<tr><td>Database</td><td>${this._esc(m.database.name)}</td></tr>`;
+        if (m.database?.compatibilityLevel) html += `<tr><td>Compatibility Level</td><td>${m.database.compatibilityLevel}</td></tr>`;
+        if (m.model?.culture) html += `<tr><td>Culture</td><td>${this._esc(m.model.culture)}</td></tr>`;
+        if (m.model?.defaultPowerBIDataSourceVersion) html += `<tr><td>Data Source Version</td><td>${this._esc(m.model.defaultPowerBIDataSourceVersion)}</td></tr>`;
+        if (m.model?.legacyRedirects != null) html += `<tr><td>Legacy Redirects</td><td>${this._esc(m.model.legacyRedirects)}</td></tr>`;
+        if (m.model?.returnErrorValuesAsNull != null) html += `<tr><td>Return Errors as Null</td><td>${this._esc(m.model.returnErrorValuesAsNull)}</td></tr>`;
+
+        html += `<tr><td>Tables</td><td>${m.tables.length}</td></tr>`;
+        html += `<tr><td>Total Columns</td><td>${totalColumns}</td></tr>`;
+        html += `<tr><td>Total Measures</td><td>${totalMeasures}</td></tr>`;
+        html += `<tr><td>Relationships</td><td>${m.relationships.length}</td></tr>`;
+        html += `<tr><td>Roles</td><td>${m.roles.length}</td></tr>`;
+        html += `<tr><td>Expressions</td><td>${m.expressions.length}</td></tr>`;
+
+        if (this.visualData) {
+            const vc = this._countDataBoundVisuals();
+            html += `<tr><td>Report Pages</td><td>${this.visualData.pages.length}</td></tr>`;
+            html += `<tr><td>Data-bound Visuals</td><td>${vc.dataBound}${vc.decoration > 0 ? ` <span style="color:var(--text-light);font-size:11px">+ ${vc.decoration} decoration</span>` : ''}</td></tr>`;
+        }
+
+        if (this.lineageEngine) {
+            const dataSources = this.lineageEngine.getAllDataSources();
+            html += `<tr><td>Data Sources</td><td>${dataSources.length}</td></tr>`;
+        }
+
+        html += '</table>';
+
+        // Table summary
+        html += '<h3>Tables</h3>';
+        html += '<table><tr><th>Table</th><th>Columns</th><th>Measures</th><th>Hidden</th></tr>';
+        for (const t of m.tables) {
+            html += `<tr>
+                <td><a href="#" class="table-link" data-table="${this._esc(t.name)}" style="color:var(--primary);text-decoration:none;font-weight:500">${this._esc(t.name)}</a></td>
+                <td>${t.columns.length}</td>
+                <td>${t.measures.length}</td>
+                <td>${t.isHidden ? '<span class="badge badge-hidden">Yes</span>' : ''}</td>
+            </tr>`;
+        }
+        html += '</table>';
+
+        // Model Insights cards (only when dynamic features or broken refs exist)
+        const dynamicSummary = this._getDynamicFeaturesSummary();
+        const brokenRefs = this.lineageEngine?.brokenRefs || [];
+        if (dynamicSummary.total > 0 || brokenRefs.length > 0) {
+            html += '<h3>Model Insights</h3>';
+            html += '<div class="insights-grid">';
+
+            if (dynamicSummary.fieldParams.length > 0) {
+                const totalFpFields = dynamicSummary.fieldParams.reduce((s, fp) => s + fp.items.length, 0);
+                html += `<div class="insight-card insight-card-fp" data-nav-section="dynamic-features">
+                    <span class="material-symbols-outlined insight-card-icon">tune</span>
+                    <div class="insight-card-text">
+                        <strong>${dynamicSummary.fieldParams.length} Field Parameter${dynamicSummary.fieldParams.length !== 1 ? 's' : ''}</strong>
+                        Visuals have hidden flexibility — ${totalFpFields} switchable field${totalFpFields !== 1 ? 's' : ''} not shown in JSON.
+                    </div>
+                </div>`;
+            }
+
+            if (dynamicSummary.calcGroups.length > 0) {
+                const totalCgItems = dynamicSummary.calcGroups.reduce((s, cg) => s + cg.items.length, 0);
+                html += `<div class="insight-card insight-card-cg" data-nav-section="dynamic-features">
+                    <span class="material-symbols-outlined insight-card-icon">calculate</span>
+                    <div class="insight-card-text">
+                        <strong>${dynamicSummary.calcGroups.length} Calculation Group${dynamicSummary.calcGroups.length !== 1 ? 's' : ''}</strong>
+                        ${totalCgItems} DAX transformation${totalCgItems !== 1 ? 's' : ''} dynamically modify co-visual measures.
+                    </div>
+                </div>`;
+            }
+
+            if (brokenRefs.length > 0) {
+                html += `<div class="insight-card insight-card-broken">
+                    <span class="material-symbols-outlined insight-card-icon">error</span>
+                    <div class="insight-card-text">
+                        <strong>${brokenRefs.length} Broken Reference${brokenRefs.length !== 1 ? 's' : ''}</strong>
+                        Some visuals reference fields that don't exist in the semantic model.
+                    </div>
+                </div>`;
+            }
+
+            html += '</div>';
+
+            // Before/After comparison widget
+            if (dynamicSummary.fieldParams.length > 0) {
+                const fp = dynamicSummary.fieldParams[0];
+                const fpRef = `${fp.table}[${fp.table}]`;
+                const fpReality = fp.items.map(i => `'${i.table}'[${i.column}]`).join(', ');
+                html += `<details class="before-after-widget">
+                    <summary><span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle">compare</span> What PBIR JSON hides vs. what this tool reveals</summary>
+                    <div class="before-after-grid">
+                        <div class="before-after-col before-col">
+                            <h4>Raw PBIR JSON</h4>
+                            <pre class="before-after-code">{ "Column": {
+    "Expression": {
+      "SourceRef": { "Entity": "${this._esc(fp.table)}" }
+    },
+    "Property": "${this._esc(fp.table)}"
+  }
+}</pre>
+                            <p class="before-after-note">Looks like an ordinary column reference. No indication this is a field parameter with ${fp.items.length} switchable fields.</p>
+                        </div>
+                        <div class="before-after-col after-col">
+                            <h4>PBIP Documenter</h4>
+                            <div class="before-after-reveal">
+                                <span class="badge badge-field-param">Field Parameter</span>
+                                <strong>'${this._esc(fp.table)}'</strong> — ${fp.items.length} available fields:
+                                <div class="fp-items-list" style="margin-top:6px">
+                                    ${fp.items.map(i => `<span class="fp-item-chip">'${this._esc(i.table)}'[${this._esc(i.column)}]</span>`).join('')}
+                                </div>
+                            </div>
+                            <p class="before-after-note">The full dynamic capability is revealed by cross-referencing the semantic model's TMDL definitions.</p>
+                        </div>
+                    </div>
+                </details>`;
+            }
+        }
+
+        document.getElementById('overviewContent').innerHTML = html;
+
+        // Bind table links
+        document.querySelectorAll('.table-link').forEach(link => {
+            link.addEventListener('click', e => {
+                e.preventDefault();
+                this.showTableDetail(link.dataset.table);
+            });
+        });
+
+        // Bind insight card navigation
+        document.querySelectorAll('.insight-card[data-nav-section]').forEach(card => {
+            card.addEventListener('click', () => {
+                this.showSection(card.dataset.navSection);
+            });
+        });
+    }
+
+    renderTables() {
+        const m = this.parsedModel;
+        let html = '<table><tr><th>Table</th><th>Columns</th><th>Measures</th><th>Hierarchies</th><th>Hidden</th></tr>';
+
+        for (const t of m.tables) {
+            html += `<tr>
+                <td><a href="#" class="table-link-2" data-table="${this._esc(t.name)}" style="color:var(--primary);font-weight:500;text-decoration:none">${this._esc(t.name)}</a></td>
+                <td>${t.columns.length}</td>
+                <td>${t.measures.length}</td>
+                <td>${t.hierarchies.length}</td>
+                <td>${t.isHidden ? '<span class="badge badge-hidden">Yes</span>' : ''}</td>
+            </tr>`;
+        }
+        html += '</table>';
+
+        document.getElementById('tablesContent').innerHTML = html;
+
+        document.querySelectorAll('.table-link-2').forEach(link => {
+            link.addEventListener('click', e => {
+                e.preventDefault();
+                this.showTableDetail(link.dataset.table);
+            });
+        });
+    }
+
+    renderMeasureCatalog() {
+        const m = this.parsedModel;
+
+        // Group by display folder
+        const byFolder = {};
+        for (const table of m.tables) {
+            for (const measure of table.measures) {
+                const folder = measure.displayFolder || '(No Folder)';
+                if (!byFolder[folder]) byFolder[folder] = [];
+                byFolder[folder].push({ ...measure, tableName: table.name });
+            }
+        }
+
+        const folders = Object.keys(byFolder).sort();
+        const measuresEl = document.getElementById('measuresContent');
+
+        const INITIAL_BATCH = 5;
+        const initialFolders = folders.slice(0, INITIAL_BATCH);
+        const remainingFolders = folders.slice(INITIAL_BATCH);
+
+        let html = this._renderFolderGroup(initialFolders, byFolder);
+
+        if (remainingFolders.length > 0) {
+            const remaining = remainingFolders.reduce((sum, f) => sum + byFolder[f].length, 0);
+            html += `<button type="button" class="btn-load-more-measures">Load ${remaining} more measure${remaining !== 1 ? 's' : ''} (${remainingFolders.length} folder${remainingFolders.length !== 1 ? 's' : ''})</button>`;
+        }
+
+        measuresEl.innerHTML = html;
+        this._bindDaxToggles(measuresEl);
+
+        const loadMore = measuresEl.querySelector('.btn-load-more-measures');
+        if (loadMore) {
+            loadMore.addEventListener('click', () => {
+                const additionalHtml = this._renderFolderGroup(remainingFolders, byFolder);
+                loadMore.insertAdjacentHTML('beforebegin', additionalHtml);
+                loadMore.remove();
+                this._bindDaxToggles(measuresEl);
+            });
+        }
+    }
+
+    _renderFolderGroup(folders, byFolder) {
+        let html = '';
+        for (const folder of folders) {
+            const measures = byFolder[folder];
+            if (measures.length > 20) {
+                html += `<details><summary><strong>${this._esc(folder)}</strong> (${measures.length} measures)</summary>`;
+                for (const measure of measures) {
+                    html += this._renderMeasureCard(measure, measure.tableName);
+                }
+                html += `</details>`;
+            } else {
+                html += `<h3>${this._esc(folder)}</h3>`;
+                for (const measure of measures) {
+                    html += this._renderMeasureCard(measure, measure.tableName);
+                }
+            }
+        }
+        return html;
+    }
+
+    renderRoles() {
+        const m = this.parsedModel;
+        let html = '';
+
+        if (m.roles.length === 0) {
+            html = '<p class="placeholder">No roles defined in this model.</p>';
+        } else {
+            for (const role of m.roles) {
+                html += `<h3>${this._esc(role.name)}</h3>`;
+                if (role.modelPermission) {
+                    html += `<p><strong>Permission:</strong> ${role.modelPermission}</p>`;
+                }
+                if (role.tablePermissions.length > 0) {
+                    html += '<table><tr><th>Table</th><th>Filter Expression</th></tr>';
+                    for (const tp of role.tablePermissions) {
+                        html += `<tr><td>${this._esc(tp.table)}</td><td><code>${this._esc(tp.filterExpression || '')}</code></td></tr>`;
+                    }
+                    html += '</table>';
+                }
+            }
+        }
+
+        document.getElementById('rolesContent').innerHTML = html;
+    }
+
+    renderExpressions() {
+        const m = this.parsedModel;
+        let html = '';
+
+        if (m.expressions.length === 0) {
+            html = '<p class="placeholder">No shared expressions defined.</p>';
+        } else {
+            for (const expr of m.expressions) {
+                html += `<h3>${this._esc(expr.name)}</h3>`;
+                if (expr.kind) html += `<p><strong>Kind:</strong> ${expr.kind}</p>`;
+                if (expr.expression) {
+                    const lines = expr.expression.split('\n');
+                    const shouldTruncate = lines.length > 5;
+                    const daxId = `dax-${Math.random().toString(36).substr(2, 9)}`;
+                    html += `<div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${daxId}">${this._esc(expr.expression)}</div>`;
+                    if (shouldTruncate) html += `<button type="button" class="btn-dax-toggle" data-target="${daxId}">Show more</button>`;
+                }
+            }
+        }
+
+        const expressionsEl = document.getElementById('expressionsContent');
+        expressionsEl.innerHTML = html;
+        this._bindDaxToggles(expressionsEl);
+    }
+
+    _bindTraceButtonDelegation() {
+        if (this._traceDelegationBound) return;
+        this._traceDelegationBound = true;
+        document.getElementById('mainContent').addEventListener('click', (e) => {
+            const traceBtn = e.target.closest('.btn-trace-lineage[data-page][data-visual]');
+            if (!traceBtn) return;
+            const pageName = traceBtn.dataset.page;
+            const visualName = traceBtn.dataset.visual;
+            this.showSection('lineage');
+            // Switch to trace view
+            const toggle = document.getElementById('lineageToggle');
+            toggle.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.remove('active'));
+            toggle.querySelector('[data-view="trace"]').classList.add('active');
+            document.getElementById('lineageFullView').classList.add('hidden');
+            document.getElementById('lineageTraceView').classList.remove('hidden');
+            document.getElementById('lineageImpactView').classList.add('hidden');
+            // Set select and render
+            this._populateVisualSelect();
+            const sel = document.getElementById('lineageVisualSelect');
+            sel.value = `${pageName}|||${visualName}`;
+            const container = document.getElementById('lineageTraceDiagram');
+            const renderer = new LineageDiagramRenderer(container, this.lineageEngine);
+            renderer.renderVisualTrace(container, pageName, visualName);
+        });
+    }
+
+    renderLineageView() {
+        if (!this.lineageEngine) return;
+
+        // Toggle handler (only bind once)
+        if (!this._lineageToggleBound) {
+            this._lineageToggleBound = true;
+            const toggle = document.getElementById('lineageToggle');
+            toggle.addEventListener('click', (e) => {
+                const btn = e.target.closest('.view-toggle-btn');
+                if (!btn) return;
+                const view = btn.dataset.view;
+                toggle.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById('lineageFullView').classList.toggle('hidden', view !== 'full');
+                document.getElementById('lineageTraceView').classList.toggle('hidden', view !== 'trace');
+                document.getElementById('lineageSourceView').classList.toggle('hidden', view !== 'source-trace');
+                document.getElementById('lineageImpactView').classList.toggle('hidden', view !== 'impact');
+                document.getElementById('lineageColumnImpactView').classList.toggle('hidden', view !== 'column-impact');
+                document.getElementById('lineageDetailPanel').classList.add('hidden');
+                if (view === 'full' && !this._lineageRendered) this._renderFullLineage();
+                if (view === 'trace') this._populateVisualSelect();
+                if (view === 'source-trace') this._populatePhysicalTableSelect();
+                if (view === 'impact') this._populateMeasureSelect();
+                if (view === 'column-impact') this._populateTableSelect();
+            });
+
+            // Trace button
+            document.getElementById('lineageTraceBtn').addEventListener('click', () => {
+                const sel = document.getElementById('lineageVisualSelect');
+                const val = sel.value;
+                if (!val) return;
+                const [pageName, visualName] = val.split('|||');
+                const container = document.getElementById('lineageTraceDiagram');
+                const renderer = new LineageDiagramRenderer(container, this.lineageEngine);
+                renderer.renderVisualTrace(container, pageName, visualName);
+            });
+
+            // Impact button
+            document.getElementById('lineageImpactBtn').addEventListener('click', () => {
+                const sel = document.getElementById('lineageMeasureSelect');
+                const measureName = sel.value;
+                if (!measureName) return;
+                const container = document.getElementById('lineageImpactDiagram');
+                const renderer = new LineageDiagramRenderer(container, this.lineageEngine);
+                renderer.renderMeasureImpact(container, measureName);
+            });
+
+            // Column Impact button
+            document.getElementById('lineageColumnImpactBtn').addEventListener('click', () => {
+                const tableSel = document.getElementById('lineageTableSelect');
+                const colSel = document.getElementById('lineageColumnSelect');
+                if (!tableSel.value || !colSel.value) return;
+                const container = document.getElementById('lineageColumnImpactDiagram');
+                const renderer = new LineageDiagramRenderer(container, this.lineageEngine);
+                renderer.renderColumnImpact(container, tableSel.value, colSel.value);
+            });
+
+            // Source Trace button
+            document.getElementById('lineageSourceTraceBtn').addEventListener('click', () => {
+                const sel = document.getElementById('lineagePhysicalTableSelect');
+                const val = sel.value;
+                if (!val) return;
+                const [schema, table] = val.includes('|||') ? val.split('|||') : ['', val];
+                const container = document.getElementById('lineageSourceTraceDiagram');
+                const renderer = new LineageDiagramRenderer(container, this.lineageEngine);
+                renderer.renderSourceTrace(container, table, schema || null);
+            });
+
+            // Table select cascade for Column Impact
+            document.getElementById('lineageTableSelect').addEventListener('change', (e) => {
+                this._populateColumnSelect(e.target.value);
+            });
+
+            // Lineage detail panel (single delegated listener for all diagrams)
+            document.getElementById('view-lineage').addEventListener('lineage-navigate', (e) => {
+                this._showLineageDetail(e.detail.type, e.detail.id);
+            });
+
+        }
+
+        // Render full lineage on first visit
+        if (!this._lineageRendered) {
+            this._lineageRendered = true;
+            requestAnimationFrame(() => this._renderFullLineage());
+        }
+    }
+
+    _renderFullLineage() {
+        const container = document.getElementById('lineageDiagramContainer');
+        this.lineageDiagramRenderer = new LineageDiagramRenderer(container, this.lineageEngine);
+        this.lineageDiagramRenderer.renderFullLineage(container);
+    }
+
+    _populateVisualSelect() {
+        const sel = document.getElementById('lineageVisualSelect');
+        if (sel.options.length > 0) return; // Already populated
+        if (!this.visualData) return;
+        for (const visual of this.visualData.visuals) {
+            const opt = document.createElement('option');
+            opt.value = `${visual.pageName}|||${visual.visualName}`;
+            opt.textContent = `${visual.pageName} — ${visual.visualName}`;
+            sel.appendChild(opt);
+        }
+    }
+
+    _populateMeasureSelect() {
+        const sel = document.getElementById('lineageMeasureSelect');
+        if (sel.options.length > 0) return; // Already populated
+        for (const table of this.parsedModel.tables) {
+            for (const measure of table.measures) {
+                const opt = document.createElement('option');
+                opt.value = measure.name;
+                opt.textContent = `${table.name}[${measure.name}]`;
+                sel.appendChild(opt);
+            }
+        }
+    }
+
+    _populatePhysicalTableSelect(preselectSchema, preselectTable) {
+        const sel = document.getElementById('lineagePhysicalTableSelect');
+        sel.innerHTML = '';
+        if (!this.lineageEngine) return;
+
+        const seen = new Set();
+        for (const src of this.lineageEngine.getAllDataSources()) {
+            const consumers = this.lineageEngine.getDataSourceConsumers(`source:${MExpressionParser._sourceKey(src)}`);
+            for (const t of consumers.tables) {
+                if (!t.physicalTable) continue;
+                const key = `${t.physicalSchema || ''}|||${t.physicalTable}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                const label = t.physicalSchema ? `${t.physicalSchema}.${t.physicalTable}` : t.physicalTable;
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = label;
+                sel.appendChild(opt);
+            }
+        }
+        if (preselectTable) {
+            const key = `${preselectSchema || ''}|||${preselectTable}`;
+            if ([...sel.options].some(o => o.value === key)) sel.value = key;
+        }
+    }
+
+    _tracePhysicalTable(schema, table) {
+        this.showSection('lineage');
+        const toggle = document.getElementById('lineageToggle');
+        toggle.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.remove('active'));
+        toggle.querySelector('[data-view="source-trace"]').classList.add('active');
+        document.getElementById('lineageFullView').classList.add('hidden');
+        document.getElementById('lineageTraceView').classList.add('hidden');
+        document.getElementById('lineageSourceView').classList.remove('hidden');
+        document.getElementById('lineageImpactView').classList.add('hidden');
+        document.getElementById('lineageColumnImpactView').classList.add('hidden');
+        this._populatePhysicalTableSelect(schema, table);
+        const container = document.getElementById('lineageSourceTraceDiagram');
+        const renderer = new LineageDiagramRenderer(container, this.lineageEngine);
+        renderer.renderSourceTrace(container, table, schema || null);
+    }
+
+    // ── Lineage Detail Panel ──
+
+    _showLineageDetail(type, id) {
+        const panel = document.getElementById('lineageDetailPanel');
+        if (!panel) return;
+
+        const engine = this.lineageEngine;
+        const model = this.parsedModel;
+        if (!engine) return;
+
+        let html = '';
+        const esc = (s) => this._esc(s);
+
+        // Determine badge and name
+        let badgeClass = type;
+        let badgeLabel = type;
+        let name = id;
+
+        const node = engine.nodes.get(id);
+
+        if (type === 'table') {
+            const tableName = id.replace('table:', '');
+            badgeLabel = 'Table';
+            name = tableName;
+            const table = model.tables.find(t => t.name === tableName);
+
+            // Columns
+            let colHtml = '';
+            if (table && table.columns.length > 0) {
+                colHtml = '<div class="lineage-detail-section"><h4>Columns</h4><table><tr><th>Name</th><th>Type</th><th>Hidden</th></tr>';
+                for (const col of table.columns) {
+                    colHtml += `<tr><td>${esc(col.name)}</td><td>${esc(col.dataType || '—')}</td><td>${col.isHidden ? 'Yes' : ''}</td></tr>`;
+                }
+                colHtml += '</table></div>';
+            }
+
+            // Relationships
+            let relHtml = '';
+            const rels = (model.relationships || []).filter(r => r.fromTable === tableName || r.toTable === tableName);
+            if (rels.length > 0) {
+                relHtml = '<div class="lineage-detail-section"><h4>Relationships</h4><table><tr><th>From</th><th>To</th><th>Type</th></tr>';
+                for (const r of rels) {
+                    const card = [r.fromCardinality, r.toCardinality].filter(Boolean).join(':') || '—';
+                    relHtml += `<tr><td>${esc(r.fromTable)}[${esc(r.fromColumn)}]</td><td>${esc(r.toTable)}[${esc(r.toColumn)}]</td><td>${card}${r.isActive === false ? ' (inactive)' : ''}</td></tr>`;
+                }
+                relHtml += '</table></div>';
+            }
+
+            // Connected sources
+            let srcHtml = '';
+            const srcEdges = engine.edges.filter(e => e.from === id && e.type === 'connects_to_source');
+            if (srcEdges.length > 0) {
+                srcHtml = '<div class="lineage-detail-section"><h4>Data Sources</h4><div class="lineage-detail-chips">';
+                for (const e of srcEdges) {
+                    const sn = engine.nodes.get(e.to);
+                    if (sn) srcHtml += `<span class="lineage-detail-chip source">${esc(sn.name)}</span>`;
+                }
+                srcHtml += '</div></div>';
+            }
+
+            html = colHtml + relHtml + srcHtml;
+
+        } else if (type === 'measure') {
+            const parts = id.replace('measure:', '').split('.');
+            const tableName = parts[0];
+            const measureName = parts.slice(1).join('.');
+            badgeLabel = 'Measure';
+            name = `[${measureName}]`;
+
+            const table = model.tables.find(t => t.name === tableName);
+            const measure = table?.measures.find(m => m.name === measureName);
+
+            // DAX
+            if (measure?.expression) {
+                html += `<div class="lineage-detail-section"><h4>DAX Expression</h4><div class="lineage-detail-dax">${esc(measure.expression)}</div></div>`;
+            }
+
+            // Column refs
+            const refs = this.measureRefs?.[measureName];
+            if (refs?.columnRefs?.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Referenced Columns</h4><div class="lineage-detail-chips">';
+                for (const cr of refs.columnRefs) {
+                    html += `<span class="lineage-detail-chip column">${esc(cr.table)}[${esc(cr.column)}]</span>`;
+                }
+                html += '</div></div>';
+            }
+
+            // Measure dependencies
+            if (refs?.measureRefs?.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Depends On Measures</h4><div class="lineage-detail-chips">';
+                for (const mr of refs.measureRefs) {
+                    html += `<span class="lineage-detail-chip measure">[${esc(mr)}]</span>`;
+                }
+                html += '</div></div>';
+            }
+
+            // Visuals using it
+            const usageKey = `measure|${tableName}|${measureName}`;
+            const usage = this.visualData?.fieldUsageMap?.[usageKey];
+            if (usage && usage.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Used By Visuals</h4><div class="lineage-detail-chips">';
+                for (const u of usage) {
+                    html += `<span class="lineage-detail-chip visual">${esc(u.pageName)} — ${esc(u.visualName)}</span>`;
+                }
+                html += '</div></div>';
+            }
+
+        } else if (type === 'column') {
+            const parts = id.replace('column:', '').split('.');
+            const tableName = parts[0];
+            const colName = parts.slice(1).join('.');
+            badgeLabel = 'Column';
+            name = `${tableName}[${colName}]`;
+
+            const table = model.tables.find(t => t.name === tableName);
+            const col = table?.columns.find(c => c.name === colName);
+
+            if (col) {
+                html += `<div class="lineage-detail-section"><h4>Properties</h4><table>`;
+                html += `<tr><td><strong>Data Type</strong></td><td>${esc(col.dataType || '—')}</td></tr>`;
+                if (col.sourceColumn) html += `<tr><td><strong>Source Column</strong></td><td>${esc(col.sourceColumn)}</td></tr>`;
+                if (col.formatString) html += `<tr><td><strong>Format</strong></td><td>${esc(col.formatString)}</td></tr>`;
+                if (col.isHidden) html += `<tr><td><strong>Hidden</strong></td><td>Yes</td></tr>`;
+                html += '</table></div>';
+            }
+
+            // Measures referencing this column
+            const refMeasures = engine.edges.filter(e => e.type === 'references_column' && e.to === id);
+            if (refMeasures.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Referenced By Measures</h4><div class="lineage-detail-chips">';
+                for (const e of refMeasures) {
+                    const mn = engine.nodes.get(e.from);
+                    if (mn) html += `<span class="lineage-detail-chip measure">[${esc(mn.name)}]</span>`;
+                }
+                html += '</div></div>';
+            }
+
+            // Visuals using this column
+            const usageKey = `column|${tableName}|${colName}`;
+            const usage = this.visualData?.fieldUsageMap?.[usageKey];
+            if (usage && usage.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Used By Visuals</h4><div class="lineage-detail-chips">';
+                for (const u of usage) {
+                    html += `<span class="lineage-detail-chip visual">${esc(u.pageName)} — ${esc(u.visualName)}</span>`;
+                }
+                html += '</div></div>';
+            }
+
+            // Relationships involving this column
+            const rels = (model.relationships || []).filter(r =>
+                (r.fromTable === tableName && r.fromColumn === colName) ||
+                (r.toTable === tableName && r.toColumn === colName)
+            );
+            if (rels.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Relationships</h4><div class="lineage-detail-chips">';
+                for (const r of rels) {
+                    const card = [r.fromCardinality, r.toCardinality].filter(Boolean).join(':') || '';
+                    html += `<span class="lineage-detail-chip table">${esc(r.fromTable)}[${esc(r.fromColumn)}] → ${esc(r.toTable)}[${esc(r.toColumn)}] ${card}</span>`;
+                }
+                html += '</div></div>';
+            }
+
+        } else if (type === 'visual') {
+            const sepIdx = id.indexOf('|');
+            const pageName = id.substring(7, sepIdx); // skip 'visual:'
+            const visualName = id.substring(sepIdx + 1);
+            badgeLabel = 'Visual';
+            name = visualName;
+
+            if (node) {
+                html += `<div class="lineage-detail-section"><table>`;
+                html += `<tr><td><strong>Type</strong></td><td>${esc(node.visualType || '—')}</td></tr>`;
+                html += `<tr><td><strong>Page</strong></td><td>${esc(pageName)}</td></tr>`;
+                html += '</table></div>';
+            }
+
+            // Fields by projection role
+            const visual = this.visualData?.visuals.find(v => v.pageName === pageName && v.visualName === visualName);
+            if (visual?.fields?.length > 0) {
+                const byRole = {};
+                for (const f of visual.fields) {
+                    const role = f.projectionName || 'Other';
+                    if (!byRole[role]) byRole[role] = [];
+                    byRole[role].push(f);
+                }
+                html += '<div class="lineage-detail-section"><h4>Fields</h4>';
+                for (const [role, fields] of Object.entries(byRole)) {
+                    html += `<div style="margin-bottom:6px"><strong style="font-size:11px;color:var(--text-secondary)">${esc(role)}</strong><div class="lineage-detail-chips">`;
+                    for (const f of fields) {
+                        const chipClass = f.type === 'measure' ? 'measure' : 'column';
+                        const label = f.type === 'measure' ? `[${f.name}]` : `${f.table}[${f.name || f.column || f.hierarchy}]`;
+                        html += `<span class="lineage-detail-chip ${chipClass}">${esc(label)}</span>`;
+                    }
+                    html += '</div></div>';
+                }
+                html += '</div>';
+            }
+
+            // Lineage summary
+            const summary = engine.getLineageSummary(pageName, visualName);
+            if (summary) {
+                html += `<div class="lineage-detail-section"><h4>Lineage</h4><span style="font-size:12px">${esc(summary)}</span></div>`;
+            }
+
+        } else if (type === 'calcItem') {
+            const parts = id.replace('calcItem:', '').split('.');
+            const tableName = parts[0];
+            const itemName = parts.slice(1).join('.');
+            badgeLabel = 'Calc Item';
+            badgeClass = 'calcItem';
+            name = itemName;
+
+            const table = model.tables.find(t => t.name === tableName);
+            const item = table?.calculationGroup?.items?.find(i => i.name === itemName);
+
+            html += `<div class="lineage-detail-section"><table><tr><td><strong>Calculation Group</strong></td><td>${esc(tableName)}</td></tr></table></div>`;
+
+            if (item?.expression) {
+                html += `<div class="lineage-detail-section"><h4>DAX Expression</h4><div class="lineage-detail-dax">${esc(item.expression)}</div></div>`;
+            }
+
+            // Visuals using this calc group
+            const visualEdges = engine.edges.filter(e => e.type === 'uses_field' && e.to === id);
+            if (visualEdges.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Used By Visuals</h4><div class="lineage-detail-chips">';
+                for (const e of visualEdges) {
+                    const vn = engine.nodes.get(e.from);
+                    if (vn) html += `<span class="lineage-detail-chip visual">${esc(vn.pageName)} — ${esc(vn.name)}</span>`;
+                }
+                html += '</div></div>';
+            }
+
+            // Measures modified by this calc group (modifies_measure edges)
+            const modEdges = engine.edges.filter(e => e.type === 'modifies_measure' && e.from === id);
+            if (modEdges.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Modifies Measures</h4><div class="lineage-detail-chips">';
+                for (const e of modEdges) {
+                    const mn = engine.nodes.get(e.to);
+                    if (mn) html += `<span class="lineage-detail-chip measure">[${esc(mn.name)}]</span>`;
+                }
+                html += '</div></div>';
+            }
+
+        } else if (type === 'fpItem') {
+            badgeLabel = 'Field Param';
+            badgeClass = 'fpItem';
+            name = node?.name || id;
+
+            html += `<div class="lineage-detail-section"><table>`;
+            html += `<tr><td><strong>Field Parameter</strong></td><td>${esc(node?.sourceTable || '')}</td></tr>`;
+            html += `<tr><td><strong>NAMEOF Target</strong></td><td>${esc(node?.name || '')}</td></tr>`;
+            if (node?.targetType) html += `<tr><td><strong>Target Type</strong></td><td>${esc(node.targetType)}</td></tr>`;
+            html += '</table></div>';
+
+            if (node?.resolvedTables?.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Resolved Data Tables</h4><div class="lineage-detail-chips">';
+                for (const rt of node.resolvedTables) {
+                    html += `<span class="lineage-detail-chip table">${esc(rt)}</span>`;
+                }
+                html += '</div></div>';
+            }
+
+            // Visuals using this field param item
+            const visualEdges = engine.edges.filter(e => e.type === 'uses_field' && e.to === id);
+            if (visualEdges.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Used By Visuals</h4><div class="lineage-detail-chips">';
+                for (const e of visualEdges) {
+                    const vn = engine.nodes.get(e.from);
+                    if (vn) html += `<span class="lineage-detail-chip visual">${esc(vn.pageName)} — ${esc(vn.name)}</span>`;
+                }
+                html += '</div></div>';
+            }
+
+            // Resolved measure (resolves_to_measure edge)
+            const resolveEdges = engine.edges.filter(e => e.type === 'resolves_to_measure' && e.from === id);
+            if (resolveEdges.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Resolves To Measure</h4><div class="lineage-detail-chips">';
+                for (const e of resolveEdges) {
+                    const mn = engine.nodes.get(e.to);
+                    if (mn) html += `<span class="lineage-detail-chip measure">[${esc(mn.name)}]</span>`;
+                }
+                html += '</div></div>';
+            }
+
+        } else if (type === 'dataSource') {
+            badgeLabel = 'Data Source';
+            badgeClass = 'source';
+            name = node?.name || id;
+
+            if (node) {
+                html += '<div class="lineage-detail-section"><table>';
+                html += `<tr><td><strong>Type</strong></td><td>${esc(node.sourceType || node.type || '—')}</td></tr>`;
+                const server = node.serverResolved || node.server;
+                if (server) html += `<tr><td><strong>Server</strong></td><td>${esc(server)}</td></tr>`;
+                const db = node.databaseResolved || node.database;
+                if (db) html += `<tr><td><strong>Database</strong></td><td>${esc(db)}</td></tr>`;
+                if (node.url) html += `<tr><td><strong>URL</strong></td><td>${esc(node.url)}</td></tr>`;
+                html += '</table></div>';
+            }
+
+            // Connected tables
+            const tableEdges = engine.edges.filter(e => e.type === 'connects_to_source' && e.to === id);
+            if (tableEdges.length > 0) {
+                html += '<div class="lineage-detail-section"><h4>Connected Tables</h4><div class="lineage-detail-chips">';
+                for (const e of tableEdges) {
+                    const tn = engine.nodes.get(e.from);
+                    if (tn) html += `<span class="lineage-detail-chip table">${esc(tn.name)}</span>`;
+                }
+                html += '</div></div>';
+            }
+        }
+
+        // Remove old type classes
+        panel.className = 'lineage-detail-panel type-' + badgeClass;
+        panel.innerHTML = `
+            <button class="lineage-detail-close" title="Close">&times;</button>
+            <div class="lineage-detail-heading">
+                <span class="lineage-badge ${badgeClass}">${esc(badgeLabel)}</span>
+                <h3>${esc(name)}</h3>
+            </div>
+            ${html}
+        `;
+        panel.querySelector('.lineage-detail-close').addEventListener('click', () => {
+            panel.classList.add('hidden');
+        });
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // ── Column Impact Tab ──
+
+    _populateTableSelect() {
+        const sel = document.getElementById('lineageTableSelect');
+        if (sel.options.length > 0) return;
+        const tables = new Set();
+        for (const [, node] of this.lineageEngine.nodes) {
+            if (node.type === 'column') tables.add(node.table);
+        }
+        for (const t of [...tables].sort()) {
+            const opt = document.createElement('option');
+            opt.value = t;
+            opt.textContent = t;
+            sel.appendChild(opt);
+        }
+        // Populate columns for first table
+        if (sel.options.length > 0) this._populateColumnSelect(sel.value);
+    }
+
+    _populateColumnSelect(tableName) {
+        const sel = document.getElementById('lineageColumnSelect');
+        sel.innerHTML = '';
+        for (const [, node] of this.lineageEngine.nodes) {
+            if (node.type === 'column' && node.table === tableName) {
+                const opt = document.createElement('option');
+                opt.value = node.name;
+                opt.textContent = node.name;
+                sel.appendChild(opt);
+            }
+        }
+    }
+
+    renderDataSourcesView() {
+        const content = document.getElementById('dataSourcesContent');
+        if (!this.lineageEngine) {
+            content.innerHTML = '<p class="placeholder">No lineage data available.</p>';
+            return;
+        }
+
+        const sources = this.lineageEngine.getAllDataSources();
+        if (sources.length === 0) {
+            content.innerHTML = '<p class="placeholder">No data sources detected. Ensure your tables have M partition sources defined.</p>';
+            return;
+        }
+
+        let html = `<p class="section-subtitle">Data engineer view — physical tables loaded from each source, column renames, and downstream consumers.</p>
+        <div class="ds-filter-bar">
+            <input type="text" id="dsFilterInput" placeholder="Filter by connector type, server, database…" class="ds-filter-input" oninput="app._filterDataSources(this.value)">
+            <div class="ds-filter-chips" id="dsFilterChips">
+                ${[...new Set(sources.map(s => s.type))].map(t => `<button type="button" class="ds-filter-chip" onclick="app._filterDataSourcesByType(this, ${JSON.stringify(t)})">${this._esc(t)}</button>`).join('')}
+                ${sources.some(s => s.gatewayRequired === true) ? `<button type="button" class="ds-filter-chip" onclick="app._filterDataSourcesByGateway(this)">Gateway Required</button>` : ''}
+                ${sources.some(s => s.parameterized) ? `<button type="button" class="ds-filter-chip" onclick="app._filterDataSourcesByParam(this)">Parameterized</button>` : ''}
+            </div>
+        </div>
+        <div id="dsCardsContainer">`;
+
+        for (const src of sources) {
+            const server    = src.serverResolved || src.server;
+            const db        = src.databaseResolved || src.database;
+            const sourceId  = `source:${MExpressionParser._sourceKey(src)}`;
+            const consumers = this.lineageEngine.getDataSourceConsumers(sourceId);
+            const mCount    = consumers.measures.length;
+            const vCount    = consumers.visuals.length;
+            const gwBadge   = src.gatewayRequired === true ? '<span class="badge" style="background:#ffebee;color:#c62828;margin-left:4px">Gateway Required</span>' : '';
+            const paramBadge = src.parameterized ? '<span class="badge badge-field-param" style="margin-left:4px">Parameterized</span>' : '';
+
+            const searchText = [src.type, server||'', db||'', src.url||'', src.path||''].join(' ').toLowerCase();
+            html += `<div class="data-source-card" data-ds-type="${this._esc(src.type)}" data-ds-gw="${src.gatewayRequired === true}" data-ds-param="${!!src.parameterized}" data-ds-search="${this._esc(searchText)}">
+                <h4><span class="lineage-badge source">${this._esc(src.type)}</span>`;
+            if (src.isInline) {
+                html += ` <span style="font-size:12px;color:var(--text-secondary)">Compressed binary / base64 data embedded in M</span>`;
+            } else if (src.isNativeQuery) {
+                html += ` <span class="badge" style="background:#fff3e0;color:#e65100;margin-left:4px">Native SQL</span>`;
+                if (server) html += ` <code style="font-size:12px;font-weight:normal">${this._esc(server)}</code>`;
+                if (db)     html += ` <span style="color:var(--text-secondary);font-size:12px">/ ${this._esc(db)}</span>`;
+                if (src.nativeQuery) html += ` <details style="display:inline-block;font-size:11px;margin-left:8px"><summary style="cursor:pointer;color:var(--text-secondary)">SQL</summary><code style="display:block;margin-top:4px;font-size:11px;white-space:pre-wrap">${this._esc(src.nativeQuery.slice(0, 500))}${src.nativeQuery.length > 500 ? '…' : ''}</code></details>`;
+            } else {
+                if (server) html += ` <code style="font-size:12px;font-weight:normal">${this._esc(server)}</code>`;
+                if (db)     html += ` <span style="color:var(--text-secondary);font-size:12px">/ ${this._esc(db)}</span>`;
+                if (src.url)  html += ` <code style="font-size:12px;font-weight:normal">${this._esc(src.url)}</code>`;
+                if (src.path) html += ` <code style="font-size:12px;font-weight:normal">${this._esc(src.path)}</code>`;
+            }
+            html += `${paramBadge}${gwBadge}</h4>`;
+
+            // Consumer summary pills
+            if (mCount > 0 || vCount > 0) {
+                html += `<div class="ds-consumer-summary">
+                    <span>${mCount} measure${mCount !== 1 ? 's' : ''}</span>
+                    <span>${vCount} visual${vCount !== 1 ? 's' : ''}</span>
+                    <span>${consumers.pages.length} page${consumers.pages.length !== 1 ? 's' : ''}</span>
+                </div>`;
+            }
+
+            // Physical tables with schema/rename drill-down
+            if (consumers.tables.length > 0) {
+                html += `<div class="ds-physical-tables">
+                    <p class="ds-section-label">Physical tables (${consumers.tables.length})</p>`;
+                for (const t of consumers.tables) {
+                    const physLabel = [t.physicalSchema, t.physicalTable].filter(Boolean).join('.');
+                    html += `<div class="ds-physical-row">
+                        <span class="ds-model-table" onclick="app.navigateTo('tables', ${JSON.stringify(t.name)})" title="Click to open table">${this._esc(t.name)}</span>`;
+                    if (physLabel) html += `<span class="ds-arrow">←</span><button type="button" class="ds-phys-label" title="Trace ${this._esc(physLabel)} to visuals" onclick="app._tracePhysicalTable(${JSON.stringify(t.physicalSchema||'')}, ${JSON.stringify(t.physicalTable||'')})">${this._esc(physLabel)} <span style="font-size:10px;opacity:0.7">↗</span></button>`;
+                    if (t.renames.length > 0) {
+                        html += ` <details class="ds-renames-details"><summary>${t.renames.length} rename${t.renames.length !== 1 ? 's' : ''}</summary><ul>`;
+                        for (const r of t.renames) {
+                            html += `<li><code>${this._esc(r.sourceName)}</code> → <code>${this._esc(r.modelName)}</code></li>`;
+                        }
+                        html += `</ul></details>`;
+                    }
+                    if (t.addedColumns.length > 0) {
+                        html += ` <span class="ds-computed-note">+${t.addedColumns.length} computed</span>`;
+                    }
+                    html += `</div>`;
+                }
+                html += `</div>`;
+            }
+
+            // Measure chips (collapsible)
+            if (consumers.measures.length > 0) {
+                html += `<details class="ds-measures-details"><summary class="ds-section-label">Measures (${consumers.measures.length})</summary><div class="ds-measure-chips">`;
+                for (const m of consumers.measures.slice(0, 20)) {
+                    html += `<span class="lineage-badge measure">[${this._esc(m.name)}]</span>`;
+                }
+                if (consumers.measures.length > 20) html += `<span style="font-size:11px;color:var(--text-secondary)">+${consumers.measures.length - 20} more</span>`;
+                html += `</div></details>`;
+            }
+
+            html += `</div>`;
+        }
+        html += `</div>`; // close dsCardsContainer
+
+        content.innerHTML = html;
+    }
+
+    _filterDataSources(query) {
+        const q = query.toLowerCase();
+        document.querySelectorAll('#dsCardsContainer .data-source-card').forEach(card => {
+            const text = card.dataset.dsSearch || '';
+            card.style.display = (!q || text.includes(q)) ? '' : 'none';
+        });
+    }
+
+    _filterDataSourcesByType(btn, type) {
+        const active = btn.classList.toggle('active');
+        document.querySelectorAll('#dsCardsContainer .data-source-card').forEach(card => {
+            if (!active) { card.style.display = ''; return; }
+            card.style.display = card.dataset.dsType === type ? '' : 'none';
+        });
+        if (!active) { // deselect other chips when cleared
+            document.querySelectorAll('#dsFilterChips .ds-filter-chip').forEach(c => c.classList.remove('active'));
+        } else {
+            document.querySelectorAll('#dsFilterChips .ds-filter-chip').forEach(c => { if (c !== btn) c.classList.remove('active'); });
+        }
+    }
+
+    _filterDataSourcesByGateway(btn) {
+        const active = btn.classList.toggle('active');
+        document.querySelectorAll('#dsCardsContainer .data-source-card').forEach(card => {
+            card.style.display = (!active || card.dataset.dsGw === 'true') ? '' : 'none';
+        });
+        if (!active) document.querySelectorAll('#dsFilterChips .ds-filter-chip').forEach(c => c.classList.remove('active'));
+        else document.querySelectorAll('#dsFilterChips .ds-filter-chip').forEach(c => { if (c !== btn) c.classList.remove('active'); });
+    }
+
+    _filterDataSourcesByParam(btn) {
+        const active = btn.classList.toggle('active');
+        document.querySelectorAll('#dsCardsContainer .data-source-card').forEach(card => {
+            card.style.display = (!active || card.dataset.dsParam === 'true') ? '' : 'none';
+        });
+        if (!active) document.querySelectorAll('#dsFilterChips .ds-filter-chip').forEach(c => c.classList.remove('active'));
+        else document.querySelectorAll('#dsFilterChips .ds-filter-chip').forEach(c => { if (c !== btn) c.classList.remove('active'); });
+    }
+
+    // ──────────────────────────────────────────────
+    // DYNAMIC FEATURES VIEW
+    // ──────────────────────────────────────────────
+
+    _getDynamicFeaturesSummary() {
+        if (!this.parsedModel || !this.docGenerator) return { fieldParams: [], calcGroups: [], total: 0 };
+        const fieldParams = [];
+        const calcGroups = [];
+        for (const table of this.parsedModel.tables) {
+            const fpItems = this.docGenerator._getFieldParameterItems(table.name);
+            if (fpItems !== null) {
+                // Find which visuals reference this FP table
+                const visuals = [];
+                if (this.visualData) {
+                    for (const page of this.visualData.pages) {
+                        for (const v of page.visuals) {
+                            if (v.fields && v.fields.some(f => (f.table || f.entity) === table.name)) {
+                                visuals.push({ name: v.visualName || v.visualType, page: page.displayName });
+                            }
+                        }
+                    }
+                }
+                fieldParams.push({ table: table.name, items: fpItems, visuals });
+            }
+            const cgItems = this.docGenerator._getCalculationGroupItems(table.name);
+            if (cgItems !== null) {
+                // Find which visuals reference this CG table
+                const visuals = [];
+                if (this.visualData) {
+                    for (const page of this.visualData.pages) {
+                        for (const v of page.visuals) {
+                            if (v.fields && v.fields.some(f => (f.table || f.entity) === table.name)) {
+                                visuals.push({ name: v.visualName || v.visualType, page: page.displayName });
+                            }
+                        }
+                    }
+                }
+                // Find which measures are modified by this calc group
+                const modifiedMeasures = [];
+                if (this.lineageEngine) {
+                    const graph = this.lineageEngine.graph;
+                    if (graph) {
+                        for (const edge of (graph.edges || [])) {
+                            if (edge.type === 'modifies_measure' && edge.source && edge.source.startsWith('calcItem:' + table.name + '.')) {
+                                const measureId = edge.target;
+                                if (measureId) modifiedMeasures.push(measureId.replace('measure:', ''));
+                            }
+                        }
+                    }
+                }
+                calcGroups.push({
+                    table: table.name,
+                    items: cgItems,
+                    precedence: table.calculationGroup?.precedence,
+                    visuals,
+                    modifiedMeasures
+                });
+            }
+        }
+        return { fieldParams, calcGroups, total: fieldParams.length + calcGroups.length };
+    }
+
+    renderDynamicFeaturesView() {
+        const content = document.getElementById('dynamicFeaturesContent');
+        const summary = this._getDynamicFeaturesSummary();
+
+        if (summary.total === 0) {
+            content.innerHTML = '<p class="placeholder">No dynamic features detected in this model. Field parameters and calculation groups will appear here when present.</p>';
+            return;
+        }
+
+        let html = `<div class="dynamic-summary-header">
+            <span class="dynamic-count">${summary.fieldParams.length} field parameter${summary.fieldParams.length !== 1 ? 's' : ''}</span>
+            <span class="dynamic-sep">&bull;</span>
+            <span class="dynamic-count">${summary.calcGroups.length} calculation group${summary.calcGroups.length !== 1 ? 's' : ''}</span>
+        </div>`;
+
+        // Field Parameters
+        for (const fp of summary.fieldParams) {
+            html += `<div class="dynamic-card dynamic-card-fp">
+                <div class="dynamic-card-header">
+                    <span class="material-symbols-outlined dynamic-card-icon">tune</span>
+                    <h3>'${this._esc(fp.table)}'</h3>
+                    <span class="badge badge-field-param">Field Parameter</span>
+                </div>
+                <div class="dynamic-card-insight">
+                    <span class="material-symbols-outlined" style="font-size:16px;color:#e65100">visibility_off</span>
+                    <span><strong>What PBIR hides:</strong> JSON only stores the last-saved selection. In reality, this visual dynamically switches between <strong>${fp.items.length} field${fp.items.length !== 1 ? 's' : ''}</strong>.</span>
+                </div>
+                <div class="dynamic-card-section">
+                    <h4>Available Fields</h4>
+                    <div class="fp-items-list">`;
+            for (const item of fp.items) {
+                html += `<span class="fp-item-chip">'${this._esc(item.table)}'[${this._esc(item.column)}]</span>`;
+            }
+            html += `</div></div>`;
+
+            if (fp.visuals.length > 0) {
+                html += `<div class="dynamic-card-section">
+                    <h4>Used by ${fp.visuals.length} Visual${fp.visuals.length !== 1 ? 's' : ''}</h4>
+                    <div class="dynamic-visual-list">`;
+                for (const v of fp.visuals) {
+                    html += `<span class="dynamic-visual-chip"><span class="material-symbols-outlined" style="font-size:12px">bar_chart</span> ${this._esc(v.name)} <span class="dynamic-visual-page">${this._esc(v.page)}</span></span>`;
+                }
+                html += `</div></div>`;
+            }
+            html += `</div>`;
+        }
+
+        // Calculation Groups
+        for (const cg of summary.calcGroups) {
+            html += `<div class="dynamic-card dynamic-card-cg">
+                <div class="dynamic-card-header">
+                    <span class="material-symbols-outlined dynamic-card-icon">calculate</span>
+                    <h3>'${this._esc(cg.table)}'</h3>
+                    <span class="badge badge-calc">Calc Group</span>
+                    ${cg.precedence != null ? `<span class="badge badge-mode">Precedence: ${cg.precedence}</span>` : ''}
+                </div>
+                <div class="dynamic-card-insight">
+                    <span class="material-symbols-outlined" style="font-size:16px;color:#e65100">visibility_off</span>
+                    <span><strong>What PBIR hides:</strong> This column appears as an ordinary reference in JSON. In reality, it's a calculation group with <strong>${cg.items.length} DAX transformation${cg.items.length !== 1 ? 's' : ''}</strong> that modify every co-visual measure.</span>
+                </div>
+                <div class="dynamic-card-section">
+                    <h4>Calculation Items</h4>
+                    <div class="calc-items-list" style="flex-direction:column;gap:6px">`;
+            const sortedItems = [...cg.items].sort((a, b) => (a.ordinal ?? 999) - (b.ordinal ?? 999));
+            for (const item of sortedItems) {
+                html += `<div class="cg-item">
+                    <span class="fp-item-chip">${this._esc(item.name)}</span>`;
+                if (/\bSELECTEDMEASURE\s*\(/i.test(item.expression || '')) {
+                    html += `<span class="badge badge-calc" style="font-size:9px">SELECTEDMEASURE</span>`;
+                }
+                if (item.expression) {
+                    html += `<details class="cg-expr-detail"><summary>Expression</summary><pre class="cg-expr-code">${this._esc(item.expression)}</pre></details>`;
+                }
+                html += `</div>`;
+            }
+            html += `</div></div>`;
+
+            if (cg.modifiedMeasures.length > 0) {
+                html += `<div class="dynamic-card-section">
+                    <h4>Modifies ${cg.modifiedMeasures.length} Measure${cg.modifiedMeasures.length !== 1 ? 's' : ''}</h4>
+                    <div class="dynamic-visual-list">`;
+                for (const m of cg.modifiedMeasures) {
+                    html += `<span class="dynamic-visual-chip"><span class="material-symbols-outlined" style="font-size:12px">functions</span> ${this._esc(m)}</span>`;
+                }
+                html += `</div></div>`;
+            }
+
+            if (cg.visuals.length > 0) {
+                html += `<div class="dynamic-card-section">
+                    <h4>Used by ${cg.visuals.length} Visual${cg.visuals.length !== 1 ? 's' : ''}</h4>
+                    <div class="dynamic-visual-list">`;
+                for (const v of cg.visuals) {
+                    html += `<span class="dynamic-visual-chip"><span class="material-symbols-outlined" style="font-size:12px">bar_chart</span> ${this._esc(v.name)} <span class="dynamic-visual-page">${this._esc(v.page)}</span></span>`;
+                }
+                html += `</div></div>`;
+            }
+            html += `</div>`;
+        }
+
+        // Blog cross-link
+        html += `<div class="dynamic-learn-more">
+            <span class="material-symbols-outlined" style="font-size:16px">menu_book</span>
+            <a href="https://powerbimvp.com/posts/pbir-json-hidden-gaps-field-parameters.html" target="_blank">Learn more: PBIR JSON Doesn't Tell the Full Story — Hidden Gaps in Field Parameters</a>
+        </div>`;
+
+        content.innerHTML = html;
+    }
+
+    renderRelationshipDiagram() {
+        const container = document.getElementById('relationshipsDiagram');
+        this.diagramRenderer = new DiagramRenderer(container);
+        this.diagramRenderer.renderRelationshipDiagram(this.parsedModel.tables, this.parsedModel.relationships);
+
+        // Also render list view
+        let html = '';
+        if (this.parsedModel.relationships.length === 0) {
+            html = '<p style="margin-top:16px;color:var(--text-secondary)">No relationships defined.</p>';
+        } else {
+            html = '<h3 style="margin-top:20px">Relationship Details</h3>';
+            html += '<table><tr><th>From</th><th></th><th>To</th><th>Cardinality</th><th>Cross-Filter</th><th>Active</th></tr>';
+            for (const r of this.parsedModel.relationships) {
+                html += `<tr>
+                    <td>${this._esc(r.fromTable)}[${this._esc(r.fromColumn)}]</td>
+                    <td class="rel-arrow">→</td>
+                    <td>${this._esc(r.toTable)}[${this._esc(r.toColumn)}]</td>
+                    <td>${(r.fromCardinality || 'many')}:${(r.toCardinality || 'one')}</td>
+                    <td>${r.crossFilteringBehavior || 'single'}</td>
+                    <td>${r.isActive ? '<span class="badge badge-active">Active</span>' : '<span class="badge badge-inactive">Inactive</span>'}</td>
+                </tr>`;
+            }
+            html += '</table>';
+        }
+        document.getElementById('relationshipsList').innerHTML = html;
+    }
+
+    renderDetailedERD() {
+        const container = document.getElementById('detailedERDContainer');
+        this.detailedERDRenderer = new DetailedERDRenderer(container);
+        this.detailedERDRenderer.render(this.parsedModel.tables, this.parsedModel.relationships);
+    }
+
+    // ──────────────────────────────────────────────
+    // REPORT PAGES & VISUAL EXPLORER
+    // ──────────────────────────────────────────────
+
+    renderReportPagesOverview() {
+        if (!this.visualData) return;
+        let html = '<table><tr><th>Page</th><th>Visuals</th></tr>';
+        for (const page of this.visualData.pages) {
+            html += `<tr>
+                <td><a href="#" class="page-nav-link" data-page-id="${this._esc(page.id)}"
+                    style="color:var(--primary);font-weight:500;text-decoration:none">
+                    ${this._esc(page.displayName)}</a></td>
+                <td>${page.visuals.length}</td>
+            </tr>`;
+        }
+        html += '</table>';
+        document.getElementById('reportPagesContent').innerHTML = html;
+
+        document.querySelectorAll('.page-nav-link').forEach(link => {
+            link.addEventListener('click', e => {
+                e.preventDefault();
+                this.showPageDetail(link.dataset.pageId);
+            });
+        });
+    }
+
+    showPageDetail(pageId) {
+        if (!this.visualData) return;
+        const page = this.visualData.pages.find(p => p.id === pageId);
+        if (!page) return;
+
+        document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
+        document.getElementById('view-report-page').classList.add('active');
+        const nameEl = document.getElementById('reportPageName');
+        nameEl.textContent = page.displayName;
+        if (page.isDrillthrough) {
+            nameEl.insertAdjacentHTML('afterend', '<span class="badge" style="background:#fff3e0;color:#e65100;margin-left:6px;vertical-align:middle">Drillthrough</span>');
+        }
+
+        // Add breadcrumb back link
+        const pageBreadcrumb = document.getElementById('pageDetailBreadcrumb');
+        if (pageBreadcrumb) {
+            pageBreadcrumb.innerHTML = `<a href="#" class="breadcrumb-link" data-section="report-pages">← Report Pages</a>`;
+            pageBreadcrumb.querySelector('.breadcrumb-link').addEventListener('click', (e) => {
+                e.preventDefault();
+                this.showSection('report-pages');
+            });
+        }
+
+        // Mark sidebar active
+        document.querySelectorAll('.sidebar-header').forEach(h => h.classList.remove('active'));
+        document.querySelectorAll('.sidebar-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.pageId === pageId);
+        });
+
+        let html = '';
+
+        // Render page layout minimap if visuals have position data
+        const visualsWithPosition = page.visuals.filter(v => v.position && v.position.x != null);
+        if (visualsWithPosition.length > 0) {
+            html += this._renderPageLayoutDiagram(page, visualsWithPosition);
+        }
+
+        if (page.visuals.length === 0) {
+            html += '<p class="placeholder"><span class="material-symbols-outlined">visibility_off</span>No visuals on this page.</p>';
+        } else {
+            for (const visual of page.visuals) {
+                html += this._renderVisualCard(visual);
+            }
+        }
+        const reportPageContent = document.getElementById('reportPageContent');
+        reportPageContent.innerHTML = html;
+        this._bindFieldChips(reportPageContent);
+        this._bindLayoutDiagramInteractions();
+    }
+
+    renderVisualUsageView() {
+        if (!this.visualData) return;
+
+        // Set up toggle
+        const toggle = document.getElementById('visualUsageToggle');
+        if (!toggle.dataset.bound) {
+            toggle.dataset.bound = 'true';
+            toggle.querySelectorAll('.view-toggle-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    toggle.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const view = btn.dataset.view;
+                    document.getElementById('visualUsageByVisual').classList.toggle('hidden', view !== 'by-visual');
+                    document.getElementById('visualUsageByField').classList.toggle('hidden', view !== 'by-field');
+                    if (view === 'by-field') {
+                        this._ensureFieldDiagramRendered();
+                    }
+                });
+            });
+        }
+
+        // Render "By Visual" view
+        this._renderByVisualView();
+    }
+
+    _ensureFieldDiagramRendered() {
+        if (this._fieldDiagramRendered) return;
+        this._fieldDiagramRendered = true;
+        const container = document.getElementById('visualUsageByField');
+        const renderer = new DiagramRenderer(container);
+        renderer.renderVisualUsageDiagram(
+            this.visualData.fieldUsageMap,
+            this.visualData.pages
+        );
+    }
+
+    _toggleDataBoundOnly(dataBoundOnly) {
+        const DECORATION_TYPES = new Set(['actionButton','shape','textbox','bookmarkNavigator','pageNavigator','image','groupContainer']);
+        document.querySelectorAll('#visualUsageByVisual .visual-card').forEach(card => {
+            const vtype = card.dataset.visualType || '';
+            if (dataBoundOnly && DECORATION_TYPES.has(vtype)) {
+                card.style.display = 'none';
+            } else {
+                card.style.display = '';
+            }
+        });
+    }
+
+    _renderByVisualView() {
+        const DECORATION_TYPES = new Set(['actionButton','shape','textbox','bookmarkNavigator','pageNavigator','image','groupContainer']);
+        let html = '';
+        for (const page of this.visualData.pages) {
+            const visuals = page.visuals;
+            const dataBound = visuals.filter(v => !DECORATION_TYPES.has(v.visualType));
+            html += `<div class="page-group">
+                <div class="page-group-header" data-page-group="${this._esc(page.id)}">
+                    <span class="material-symbols-outlined">auto_stories</span>
+                    ${this._esc(page.displayName)}
+                    <span style="font-size:12px;font-weight:400;color:var(--text-secondary);margin-left:auto">
+                        ${dataBound.length} data-bound · ${visuals.length - dataBound.length} decoration
+                    </span>
+                    <span class="material-symbols-outlined chevron-icon">expand_more</span>
+                </div>
+                <div class="page-group-content">`;
+
+            if (visuals.length === 0) {
+                html += '<p class="visual-card-empty">No visuals on this page.</p>';
+            } else {
+                for (const visual of visuals) {
+                    html += this._renderVisualCard(visual);
+                }
+            }
+            html += '</div></div>';
+        }
+        const byVisualEl = document.getElementById('visualUsageByVisual');
+        byVisualEl.innerHTML = html;
+
+        // Bind page group collapse
+        byVisualEl.querySelectorAll('.page-group-header').forEach(header => {
+            header.addEventListener('click', () => {
+                header.classList.toggle('collapsed');
+                header.nextElementSibling.classList.toggle('collapsed');
+            });
+        });
+
+        this._bindFieldChips(byVisualEl);
+    }
+
+    _renderPageLayoutDiagram(page, visualsWithPosition) {
+        const pageW = page.pageWidth || 1280;
+        const pageH = page.pageHeight || 720;
+
+        // Scale to fit max 700px wide
+        const maxWidth = 700;
+        const scale = Math.min(maxWidth / pageW, 1);
+        const svgW = Math.round(pageW * scale);
+        const svgH = Math.round(pageH * scale);
+
+        // Visual type color map
+        const typeColors = {
+            pivotTable: { fill: '#e3f2fd', stroke: '#1565c0' },
+            table: { fill: '#e3f2fd', stroke: '#1565c0' },
+            matrix: { fill: '#e3f2fd', stroke: '#1565c0' },
+            barChart: { fill: '#fff8e1', stroke: '#f57f17' },
+            columnChart: { fill: '#fff8e1', stroke: '#f57f17' },
+            clusteredBarChart: { fill: '#fff8e1', stroke: '#f57f17' },
+            clusteredColumnChart: { fill: '#fff8e1', stroke: '#f57f17' },
+            stackedBarChart: { fill: '#fff8e1', stroke: '#f57f17' },
+            stackedColumnChart: { fill: '#fff8e1', stroke: '#f57f17' },
+            lineChart: { fill: '#e8f5e9', stroke: '#2e7d32' },
+            areaChart: { fill: '#e8f5e9', stroke: '#2e7d32' },
+            lineClusteredColumnComboChart: { fill: '#e8f5e9', stroke: '#2e7d32' },
+            pieChart: { fill: '#fce4ec', stroke: '#c62828' },
+            donutChart: { fill: '#fce4ec', stroke: '#c62828' },
+            card: { fill: '#f3e5f5', stroke: '#6a1b9a' },
+            multiRowCard: { fill: '#f3e5f5', stroke: '#6a1b9a' },
+            slicer: { fill: '#e0f2f1', stroke: '#00695c' },
+            map: { fill: '#e8eaf6', stroke: '#283593' },
+            filledMap: { fill: '#e8eaf6', stroke: '#283593' },
+            shape: { fill: '#f5f5f5', stroke: '#9e9e9e' },
+            textbox: { fill: '#f5f5f5', stroke: '#9e9e9e' },
+            image: { fill: '#f5f5f5', stroke: '#9e9e9e' },
+            actionButton: { fill: '#f5f5f5', stroke: '#9e9e9e' }
+        };
+        const defaultColor = { fill: '#f5f5f5', stroke: '#757575' };
+
+        let rects = '';
+        for (let i = 0; i < visualsWithPosition.length; i++) {
+            const v = visualsWithPosition[i];
+            const pos = v.position;
+            const x = Math.round(pos.x * scale);
+            const y = Math.round(pos.y * scale);
+            const w = Math.round((pos.width || 100) * scale);
+            const h = Math.round((pos.height || 60) * scale);
+            const vName = v.visualName || v.visualType || 'visual';
+            const vType = v.visualType || 'unknown';
+            const colors = typeColors[vType] || defaultColor;
+
+            // Truncate label to fit
+            const maxChars = Math.max(3, Math.floor(w / 7));
+            const label = vName.length > maxChars ? vName.substring(0, maxChars - 1) + '...' : vName;
+
+            rects += `<g class="layout-visual-rect" data-visual-index="${i}" data-visual-name="${this._esc(vName)}">
+                <rect x="${x}" y="${y}" width="${w}" height="${h}"
+                    rx="3" ry="3"
+                    fill="${colors.fill}" stroke="${colors.stroke}" stroke-width="1.5"
+                    opacity="0.85"/>
+                <text x="${x + w / 2}" y="${y + h / 2 + 4}" text-anchor="middle"
+                    font-size="10" font-family="Inter, sans-serif" fill="${colors.stroke}"
+                    pointer-events="none">${this._esc(label)}</text>
+            </g>`;
+        }
+
+        return `<div class="page-layout-diagram">
+            <div class="page-layout-header">
+                <span class="material-symbols-outlined" style="font-size:16px">grid_view</span>
+                Page Layout
+                <span class="page-layout-dims">${pageW} x ${pageH}</span>
+            </div>
+            <svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">
+                <rect width="${svgW}" height="${svgH}" fill="#f8f8f8" stroke="#d0ccc4" stroke-width="1" rx="2"/>
+                ${rects}
+            </svg>
+            <div class="page-layout-tooltip" id="layoutTooltip" style="display:none"></div>
+        </div>`;
+    }
+
+    _bindLayoutDiagramInteractions() {
+        document.querySelectorAll('.layout-visual-rect').forEach(g => {
+            const visualName = g.dataset.visualName;
+
+            g.addEventListener('mouseenter', () => {
+                const rect = g.querySelector('rect');
+                rect.setAttribute('opacity', '1');
+                rect.setAttribute('stroke-width', '2.5');
+
+                // Show tooltip
+                const tooltip = document.getElementById('layoutTooltip');
+                if (tooltip) {
+                    tooltip.textContent = visualName;
+                    tooltip.style.display = 'block';
+                }
+            });
+
+            g.addEventListener('mouseleave', () => {
+                const rect = g.querySelector('rect');
+                rect.setAttribute('opacity', '0.85');
+                rect.setAttribute('stroke-width', '1.5');
+
+                const tooltip = document.getElementById('layoutTooltip');
+                if (tooltip) tooltip.style.display = 'none';
+            });
+
+            // Click to scroll to corresponding visual card
+            g.addEventListener('click', () => {
+                const cards = document.querySelectorAll('.visual-card');
+                for (const card of cards) {
+                    const h4 = card.querySelector('h4');
+                    if (h4 && h4.textContent.trim() === visualName) {
+                        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        card.style.transition = 'box-shadow 0.3s ease';
+                        card.style.boxShadow = '0 0 0 3px var(--accent)';
+                        setTimeout(() => { card.style.boxShadow = ''; }, 2000);
+                        break;
+                    }
+                }
+            });
+        });
+    }
+
+    _renderVisualCard(visual) {
+        const vType = visual.visualType || 'unknown';
+        const vName = visual.visualName || vType;
+
+        // Check if this visual uses any dynamic features
+        let hasDynamic = false;
+        if (this.docGenerator && visual.fields) {
+            const seen = new Set();
+            for (const f of visual.fields) {
+                const t = f.table || f.entity || '';
+                if (!t || seen.has(t)) continue;
+                seen.add(t);
+                if (this.docGenerator._getFieldParameterItems(t) !== null ||
+                    this.docGenerator._getCalculationGroupItems(t) !== null) {
+                    hasDynamic = true;
+                    break;
+                }
+            }
+        }
+
+        let html = `<div class="visual-card" data-visual-type="${this._esc(vType)}">
+            <div class="visual-card-header">
+                <h4>${this._esc(vName)}</h4>
+                <span class="badge-visual-type">${this._esc(vType)}</span>`;
+        if (hasDynamic) {
+            // Compute flexibility breakdown
+            let fpCount = 0, cgCount = 0;
+            const seenFlex = new Set();
+            if (this.docGenerator && visual.fields) {
+                for (const f of visual.fields) {
+                    const t = f.table || f.entity || '';
+                    if (!t || seenFlex.has(t)) continue;
+                    seenFlex.add(t);
+                    const fpItems = this.docGenerator._getFieldParameterItems(t);
+                    if (fpItems !== null) { fpCount += fpItems.length; continue; }
+                    const cgItems = this.docGenerator._getCalculationGroupItems(t);
+                    if (cgItems !== null) cgCount += cgItems.length;
+                }
+            }
+            let flexLabel = '';
+            if (fpCount > 0) flexLabel += `${fpCount} FP`;
+            if (cgCount > 0) flexLabel += (flexLabel ? ' + ' : '') + `${cgCount} CG`;
+            html += `<span class="badge badge-dynamic" title="Dynamic: ${flexLabel}">${flexLabel}</span>`;
+        }
+
+        // Lineage summary badge + trace button
+        if (this.lineageEngine && visual.pageName) {
+            const summary = this.lineageEngine.getLineageSummary(visual.pageName, vName);
+            if (summary) {
+                html += `<span class="lineage-mini" style="margin-left:auto">${this._esc(summary)}</span>`;
+            }
+            html += `<button type="button" class="btn-trace-lineage btn-trace-sm" data-page="${this._esc(visual.pageName)}" data-visual="${this._esc(vName)}">
+                <span class="material-symbols-outlined" style="font-size:14px">account_tree</span> Trace
+            </button>`;
+        }
+
+        html += `</div>`;
+
+        if (!visual.fields || visual.fields.length === 0) {
+            html += '<p class="visual-card-empty">No data fields</p>';
+        } else {
+            const roleGroups = {};
+            for (const field of visual.fields) {
+                const role = this._normalizeRoleName(field.projectionName || 'Other');
+                if (!roleGroups[role]) roleGroups[role] = [];
+                roleGroups[role].push(field);
+            }
+
+            const roleOrder = ['Values', 'Category', 'Series', 'Filters', 'Tooltips', 'Other'];
+            html += '<div class="visual-field-roles">';
+            for (const role of roleOrder) {
+                const fields = roleGroups[role];
+                if (!fields || fields.length === 0) continue;
+
+                html += `<div class="visual-role-row">
+                    <span class="visual-role-label">${this._esc(role)}</span>
+                    <div class="visual-role-fields">`;
+
+                for (const field of fields) {
+                    const tableName = field.table || field.entity || '';
+                    const fieldName = field.name || field.column || field.hierarchy || '';
+                    html += `<button type="button" class="field-chip" data-role="${this._esc(role)}"
+                        data-table="${this._esc(tableName)}"
+                        data-field="${this._esc(fieldName)}">${this._esc(tableName)}[${this._esc(fieldName)}]</button>`;
+
+                    // Annotate field param / calc group tables
+                    if (this.docGenerator && tableName) {
+                        const fpItems = this.docGenerator._getFieldParameterItems(tableName);
+                        if (fpItems !== null) {
+                            html += `<span class="badge badge-field-param" title="${fpItems.map(i => "'" + i.table + "'[" + i.column + "]").join(', ')}">Field Param (${fpItems.length})</span>`;
+                        } else {
+                            const cgItems = this.docGenerator._getCalculationGroupItems(tableName);
+                            if (cgItems !== null) {
+                                html += `<span class="badge badge-calc" title="${cgItems.map(i => i.name).join(', ')}">Calc Group (${cgItems.length})</span>`;
+                            }
+                        }
+                    }
+                }
+                html += '</div></div>';
+            }
+            html += '</div>';
+
+            // Show field param / calc group details for tables referenced by this visual
+            if (this.docGenerator && visual.fields) {
+                const seenTables = new Set();
+                for (const field of visual.fields) {
+                    const t = field.table || field.entity || '';
+                    if (!t || seenTables.has(t)) continue;
+                    seenTables.add(t);
+
+                    const fpItems = this.docGenerator._getFieldParameterItems(t);
+                    if (fpItems !== null && fpItems.length > 0) {
+                        const fpSel = visual.fpSelections?.[t];
+                        const selectedIdx = fpSel?.selectedIndex ?? null;
+                        const selectedItem = (selectedIdx !== null && fpItems[selectedIdx]) ? fpItems[selectedIdx] : null;
+                        html += `<div class="visual-special-block fp-block">
+                            <div class="visual-special-header"><span class="badge badge-field-param"><span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle">tune</span> Field Parameter</span> <strong>'${this._esc(t)}'</strong> — ${fpItems.length} available field${fpItems.length !== 1 ? 's' : ''}:</div>
+                            <div class="dynamic-card-insight" style="margin:6px 0 8px">
+                                <span class="material-symbols-outlined" style="font-size:14px;color:#e65100">visibility_off</span>
+                                <span>PBIR JSON shows only the last-saved selection. Semantic model defines ${fpItems.length} field${fpItems.length !== 1 ? 's' : ''} — user can switch at runtime.</span>
+                            </div>`;
+                        if (selectedItem) {
+                            html += `<div style="margin:4px 0 6px;font-size:12px"><strong>Last selected:</strong> <span class="fp-item-chip fp-item-selected">'${this._esc(selectedItem.table)}'[${this._esc(selectedItem.column)}]</span></div>`;
+                        }
+                        html += `<div style="font-size:12px;margin-bottom:4px"><strong>All ${fpItems.length} options (from semantic model):</strong></div>
+                            <div class="fp-items-list">`;
+                        for (let i = 0; i < fpItems.length; i++) {
+                            const item = fpItems[i];
+                            const isSelected = i === selectedIdx;
+                            html += `<span class="fp-item-chip${isSelected ? ' fp-item-selected' : ''}" title="${isSelected ? 'Last selected' : ''}">'${this._esc(item.table)}'[${this._esc(item.column)}]${isSelected ? ' ✓' : ''}</span>`;
+                        }
+                        html += `</div></div>`;
+                    } else {
+                        const cgItems = this.docGenerator._getCalculationGroupItems(t);
+                        if (cgItems !== null && cgItems.length > 0) {
+                            html += `<div class="visual-special-block cg-block">
+                                <div class="visual-special-header"><span class="badge badge-calc"><span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle">calculate</span> Calc Group</span> <strong>'${this._esc(t)}'</strong> — ${cgItems.length} item${cgItems.length !== 1 ? 's' : ''}:</div>
+                                <div class="dynamic-card-insight" style="margin:6px 0 8px">
+                                    <span class="material-symbols-outlined" style="font-size:14px;color:#e65100">visibility_off</span>
+                                    <span>JSON shows: <code>'${this._esc(t)}'[Name]</code> (ordinary column). Reality: calculation group with ${cgItems.length} DAX transformation${cgItems.length !== 1 ? 's' : ''} modifying co-visual measures.</span>
+                                </div>
+                                <div class="calc-items-list">`;
+                            for (const item of cgItems) {
+                                html += `<div class="cg-item">
+                                    <span class="fp-item-chip">${this._esc(item.name)}</span>`;
+                                if (item.expression) {
+                                    html += `<details class="cg-expr-detail"><summary>Expression</summary><pre class="cg-expr-code">${this._esc(item.expression)}</pre></details>`;
+                                }
+                                html += `</div>`;
+                            }
+                            html += `</div></div>`;
+                        }
+                    }
+                }
+            }
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    _countDataBoundVisuals() {
+        if (!this.visualData?.visuals) return { dataBound: 0, decoration: 0, total: 0 };
+        const DECORATION_TYPES = new Set([
+            'actionButton', 'shape', 'textbox', 'bookmarkNavigator',
+            'pageNavigator', 'image', 'groupContainer'
+        ]);
+        let dataBound = 0, decoration = 0;
+        for (const v of this.visualData.visuals) {
+            if (DECORATION_TYPES.has(v.visualType)) decoration++;
+            else dataBound++;
+        }
+        return { dataBound, decoration, total: dataBound + decoration };
+    }
+
+    _normalizeRoleName(projectionName) {
+        if (!projectionName) return 'Other';
+        const lower = projectionName.toLowerCase();
+        if (lower === 'values' || lower === 'y') return 'Values';
+        if (lower === 'category' || lower === 'x' || lower === 'axis' || lower === 'rows' || lower === 'columns') return 'Category';
+        if (lower === 'series' || lower === 'legend') return 'Series';
+        if (lower === 'filter' || lower === 'filters') return 'Filters';
+        if (lower === 'tooltips' || lower === 'tooltip') return 'Tooltips';
+        if (lower === 'sort' || lower === 'visualobjects') return 'Other';
+        return projectionName.charAt(0).toUpperCase() + projectionName.slice(1);
+    }
+
+    _bindFieldChips(container) {
+        const root = container || document;
+        if (root._fieldChipBound) return;
+        root._fieldChipBound = true;
+        root.addEventListener('click', (e) => {
+            const chip = e.target.closest('.field-chip[data-table]');
+            if (!chip) return;
+            const tableName = chip.dataset.table;
+            if (tableName && this.parsedModel.tables.find(t => t.name === tableName)) {
+                this.showTableDetail(tableName);
+            }
+        });
+    }
+
+    // ──────────────────────────────────────────────
+    // MEASURE CARD RENDERING
+    // ──────────────────────────────────────────────
+
+    _renderMeasureCard(measure, tableName) {
+        let html = `<div class="measure-card">
+            <h4>${this._esc(measure.name)} <span class="badge badge-table">${this._esc(tableName)}</span></h4>`;
+
+        if (measure.description) {
+            html += `<div class="description-quote">${this._esc(measure.description)}</div>`;
+        }
+
+        html += '<div class="measure-meta">';
+        if (measure.displayFolder) html += `<span>📁 ${this._esc(measure.displayFolder)}</span>`;
+        if (measure.formatString) html += `<span>📐 ${this._esc(measure.formatString)}</span>`;
+        html += '</div>';
+
+        if (measure.expression) {
+            const lines = measure.expression.split('\n');
+            const shouldTruncate = lines.length > 5;
+            const daxId = `dax-${Math.random().toString(36).substr(2, 9)}`;
+            html += `<div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${daxId}">${this._esc(measure.expression)}</div>`;
+            if (shouldTruncate) {
+                html += `<button type="button" class="btn-dax-toggle" data-target="${daxId}">Show more</button>`;
+            }
+        }
+
+        // References
+        const refs = this.measureRefs?.[measure.name];
+        if (refs) {
+            if (refs.columnRefs.length > 0) {
+                html += '<div style="margin:4px 0;font-size:13px"><strong>Columns:</strong> ';
+                html += refs.columnRefs.map(r => `<code style="background:#e3f2fd;padding:1px 4px;border-radius:2px">${this._esc(r.table)}[${this._esc(r.column)}]</code>`).join(' ');
+                html += '</div>';
+            }
+            if (refs.measureRefs.length > 0) {
+                html += '<div style="margin:4px 0;font-size:13px"><strong>Measures:</strong> ';
+                html += refs.measureRefs.map(r => `<code style="background:#fff8e1;padding:1px 4px;border-radius:2px">[${this._esc(r)}]</code>`).join(' ');
+                html += '</div>';
+            }
+        }
+
+        // Measure dependency chain
+        if (this.lineageEngine) {
+            const chain = this.lineageEngine.resolveMeasureChain(measure.name);
+            if (chain.length > 0) {
+                html += '<div class="measure-chain"><strong style="font-size:11px;color:var(--text-secondary)">Depends on:</strong> ';
+                for (let i = 0; i < chain.length; i++) {
+                    if (i > 0) html += '<span class="measure-chain-arrow">\u2192</span>';
+                    html += `<span class="measure-chain-item">[${this._esc(chain[i].name)}]</span>`;
+                }
+                html += '</div>';
+            }
+        }
+
+        // Visual usage
+        if (this.visualData) {
+            const usageKey = `measure|${tableName}|${measure.name}`;
+            const usage = this.visualData.fieldUsageMap[usageKey];
+            if (usage && usage.length > 0) {
+                html += '<div style="margin-top:6px">';
+                for (const u of usage) {
+                    html += `<span class="visual-usage-tag">${this._esc(u.pageName)}: ${this._esc(u.visualName)}</span> `;
+                }
+                html += '</div>';
+            }
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    // ──────────────────────────────────────────────
+    // DOWNLOADS
+    // ──────────────────────────────────────────────
+
+    downloadMarkdown(scope = 'all', btn = null) {
+        this._track('Download', { format: 'markdown', scope });
+        if (!this.docGenerator) return;
+        if (scope === 'visuals' && (!this.visualData || this.visualData.pages.length === 0)) {
+            this.showToast('No report data — include a report folder to export visuals', 'error');
+            return;
+        }
+        const originalHTML = btn ? btn.innerHTML : null;
+        if (btn) { btn.innerHTML = 'Generating…'; btn.disabled = true; }
+        requestAnimationFrame(() => {
+            try {
+                const md = this.docGenerator.generateMarkdown(scope, this.visualData);
+                const suffixMap = { all: '', model: '-model', visuals: '-visuals' };
+                const name = (this.parsedModel.database?.name || 'model') + '-documentation' + (suffixMap[scope] || '') + '.md';
+                this._downloadFile(md, name, 'text/markdown');
+                this.showToast('Markdown downloaded');
+                this._showValueMomentToast();
+            } finally {
+                if (btn) { btn.innerHTML = originalHTML; btn.disabled = false; }
+                document.getElementById('mdOptions')?.classList.remove('open');
+            }
+        });
+    }
+
+    downloadFullReport(scope = 'all', btn = null) {
+        this._track('Download', { format: 'html', scope });
+        if (!this.docGenerator) return;
+        if (scope === 'visuals' && (!this.visualData || this.visualData.pages.length === 0)) {
+            this.showToast('No report data — include a report folder to export visuals', 'error');
+            return;
+        }
+        const originalHTML = btn ? btn.innerHTML : null;
+        if (btn) { btn.innerHTML = 'Generating…'; btn.disabled = true; }
+        requestAnimationFrame(() => {
+            try {
+                if (!this.diagramRenderer) this.renderRelationshipDiagram();
+                const html = this.docGenerator.generateFullReport(
+                    this.visualData,
+                    this.diagramRenderer,
+                    scope
+                );
+                const suffixMap = { all: '', model: '-model', visuals: '-visuals' };
+                const name = (this.parsedModel.database?.name || 'model') + '-full-report' + (suffixMap[scope] || '') + '.html';
+                this._downloadFile(html, name, 'text/html');
+                this.showToast('Full report downloaded');
+                this._showValueMomentToast();
+            } finally {
+                if (btn) { btn.innerHTML = originalHTML; btn.disabled = false; }
+                document.getElementById('htmlOptions')?.classList.remove('open');
+            }
+        });
+    }
+
+    _downloadFile(content, filename, mimeType) {
+        const blob = new Blob([content], { type: mimeType + ';charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    // ──────────────────────────────────────────────
+    // DIAGRAM EXPORT
+    // ──────────────────────────────────────────────
+
+    _handleDiagramExport(format, diagramType) {
+        const modelName = this.parsedModel?.database?.name || 'model';
+        try {
+            switch (format) {
+                case 'svg':
+                    this._exportDiagramSVG(diagramType, modelName);
+                    break;
+                case 'drawio':
+                    this._exportDiagramDrawio(diagramType, modelName);
+                    break;
+                case 'mermaid':
+                    this._exportDiagramMermaid(diagramType, modelName);
+                    break;
+                case 'pdf':
+                    this._exportDiagramPDF(diagramType, modelName);
+                    break;
+                case 'pdf-download':
+                    this._downloadDiagramPDF(diagramType, modelName);
+                    break;
+            }
+        } catch (err) {
+            console.error('Diagram export error:', err);
+            this.showToast('Export failed: ' + err.message, 'error');
+        }
+    }
+
+    _exportDiagramSVG(diagramType, modelName) {
+        let svgString = null;
+        let filename = `${modelName}-${diagramType}.svg`;
+
+        const containerMap = {
+            'relationships': 'relationshipsDiagram',
+            'detailed-erd': 'detailedERDContainer',
+            'visual-usage': 'visualUsageByVisual',
+            'lineage-full': 'lineageDiagramContainer',
+            'lineage-trace': 'lineageTraceDiagram',
+            'lineage-source-trace': 'lineageSourceTraceDiagram',
+            'lineage-impact': 'lineageImpactDiagram',
+            'lineage-column': 'lineageColumnImpactDiagram'
+        };
+
+        const containerId = containerMap[diagramType];
+        if (!containerId) return;
+
+        const container = document.getElementById(containerId);
+        const svg = container?.querySelector('svg');
+        if (!svg) {
+            this.showToast('No diagram rendered yet. View the diagram first.', 'error');
+            return;
+        }
+
+        // Clone SVG for standalone export
+        const clone = svg.cloneNode(true);
+
+        // Set explicit dimensions from viewBox for standalone rendering
+        const viewBox = clone.getAttribute('viewBox');
+        if (viewBox) {
+            const parts = viewBox.split(/\s+/).map(Number);
+            clone.setAttribute('width', parts[2]);
+            clone.setAttribute('height', parts[3]);
+        }
+
+        // Ensure xmlns
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+
+        // Add embedded font style for standalone viewing
+        const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+        style.textContent = `text { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }`;
+        clone.insertBefore(style, clone.firstChild);
+
+        svgString = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+            new XMLSerializer().serializeToString(clone);
+
+        this._downloadFile(svgString, filename, 'image/svg+xml');
+        this.showToast(`Downloaded ${filename}`);
+        this._track('Diagram Export', { format: 'svg', diagram: diagramType });
+    }
+
+    _getDiagramSVGClone(diagramType) {
+        const containerMap = {
+            'relationships': 'relationshipsDiagram',
+            'detailed-erd': 'detailedERDContainer',
+            'visual-usage': 'visualUsageByVisual',
+            'lineage-full': 'lineageDiagramContainer',
+            'lineage-trace': 'lineageTraceDiagram',
+            'lineage-source-trace': 'lineageSourceTraceDiagram',
+            'lineage-impact': 'lineageImpactDiagram',
+            'lineage-column': 'lineageColumnImpactDiagram'
+        };
+        const containerId = containerMap[diagramType];
+        if (!containerId) return null;
+        const container = document.getElementById(containerId);
+        const svg = container?.querySelector('svg');
+        if (!svg) return null;
+
+        const clone = svg.cloneNode(true);
+        let width = 0, height = 0;
+        const viewBox = clone.getAttribute('viewBox');
+        if (viewBox) {
+            const parts = viewBox.split(/\s+/).map(Number);
+            width = parts[2];
+            height = parts[3];
+            clone.setAttribute('width', width);
+            clone.setAttribute('height', height);
+        } else {
+            width = parseFloat(clone.getAttribute('width')) || 800;
+            height = parseFloat(clone.getAttribute('height')) || 600;
+        }
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+
+        const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+        style.textContent = `text { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }`;
+        clone.insertBefore(style, clone.firstChild);
+
+        return { clone, width, height };
+    }
+
+    _exportDiagramPDF(diagramType, modelName) {
+        const result = this._getDiagramSVGClone(diagramType);
+        if (!result) {
+            this.showToast('No diagram rendered yet. View the diagram first.', 'error');
+            return;
+        }
+
+        const svgStr = new XMLSerializer().serializeToString(result.clone);
+        const safeTitle = `${modelName}-${diagramType}`.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        const win = window.open('', '_blank');
+        if (!win) {
+            this.showToast('Pop-up blocked. Allow pop-ups for this page and try again.', 'error');
+            return;
+        }
+        win.onload = () => {
+            win.print();
+            win.onafterprint = () => win.close();
+        };
+        win.document.write(`<!DOCTYPE html><html><head><title>${safeTitle}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{display:flex;justify-content:center;align-items:flex-start;background:#fff}
+svg{max-width:100%;height:auto}
+@page{size:auto;margin:10mm}
+@media print{body{margin:0}}
+</style></head><body>${svgStr}</body></html>`);
+        win.document.close();
+
+        this._track('Diagram Export', { format: 'pdf', diagram: diagramType });
+    }
+
+    async _downloadDiagramPDF(diagramType, modelName) {
+        if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+            this.showToast('PDF library still loading. Try again in a moment.', 'error');
+            return;
+        }
+
+        const result = this._getDiagramSVGClone(diagramType);
+        if (!result) {
+            this.showToast('No diagram rendered yet. View the diagram first.', 'error');
+            return;
+        }
+        const { clone, width, height } = result;
+
+        // svg2pdf.js needs the SVG mounted in the DOM to resolve text metrics.
+        // Use a hidden host that preserves layout (display:block, opacity:0).
+        const host = document.createElement('div');
+        host.style.cssText = 'position:fixed;left:-99999px;top:0;width:auto;height:auto;visibility:hidden;';
+        host.appendChild(clone);
+        document.body.appendChild(host);
+
+        try {
+            const { jsPDF } = window.jspdf;
+            const orientation = width >= height ? 'landscape' : 'portrait';
+            const pdf = new jsPDF({ orientation, unit: 'pt', format: [width, height] });
+            await pdf.svg(clone, { x: 0, y: 0, width, height });
+            pdf.save(`${modelName}-${diagramType}.pdf`);
+            this.showToast('PDF downloaded', 'success');
+            this._track('Diagram Export', { format: 'pdf-download', diagram: diagramType });
+        } catch (err) {
+            console.error('PDF generation failed:', err);
+            this.showToast('PDF generation failed: ' + err.message, 'error');
+        } finally {
+            host.remove();
+        }
+    }
+
+    _exportDiagramDrawio(diagramType, modelName) {
+        if (typeof DrawioExporter === 'undefined') {
+            this.showToast('draw.io exporter not loaded', 'error');
+            return;
+        }
+
+        const exporter = new DrawioExporter(this.parsedModel, this.lineageEngine);
+        let xml;
+
+        if (diagramType === 'relationships') {
+            xml = exporter.generateERD();
+        } else if (diagramType === 'detailed-erd') {
+            xml = exporter.generateDetailedERD();
+        } else if (diagramType.startsWith('lineage')) {
+            xml = exporter.generateLineage();
+        } else {
+            this.showToast('draw.io export not available for this diagram type', 'error');
+            return;
+        }
+
+        const filename = `${modelName}-${diagramType}.drawio`;
+        this._downloadFile(xml, filename, 'application/xml');
+        this.showToast(`Downloaded ${filename} — open in draw.io to edit`);
+        this._track('Diagram Export', { format: 'drawio', diagram: diagramType });
+    }
+
+    _exportDiagramMermaid(diagramType, modelName) {
+        if (typeof MermaidExporter === 'undefined') {
+            this.showToast('Mermaid exporter not loaded', 'error');
+            return;
+        }
+
+        const exporter = new MermaidExporter(this.parsedModel, this.lineageEngine, this.visualData);
+        let mermaidText;
+
+        if (diagramType === 'relationships') {
+            mermaidText = exporter.generateERDiagram();
+        } else if (diagramType.startsWith('lineage')) {
+            mermaidText = exporter.generateLineageFlowchart();
+        } else {
+            this.showToast('Mermaid export not available for this diagram type', 'error');
+            return;
+        }
+
+        // Copy to clipboard
+        navigator.clipboard.writeText(mermaidText).then(() => {
+            this.showToast('Mermaid diagram copied to clipboard — paste in mermaid.live or any Mermaid-compatible tool');
+        }).catch(() => {
+            // Fallback: download as .mmd file
+            this._downloadFile(mermaidText, `${modelName}-${diagramType}.mmd`, 'text/plain');
+            this.showToast(`Downloaded ${modelName}-${diagramType}.mmd`);
+        });
+        this._track('Diagram Export', { format: 'mermaid', diagram: diagramType });
+    }
+
+    _handleLineageZoom(action, targetId) {
+        const container = document.getElementById(targetId);
+        if (!container) return;
+        const svg = container.querySelector('svg');
+        if (!svg) return;
+
+        const viewBox = svg.getAttribute('viewBox');
+        if (!viewBox) return;
+        const parts = viewBox.split(/\s+/).map(Number);
+        let [x, y, w, h] = parts;
+
+        const origW = parseFloat(svg.dataset.origW || w);
+        const origH = parseFloat(svg.dataset.origH || h);
+        if (!svg.dataset.origW) {
+            svg.dataset.origW = w;
+            svg.dataset.origH = h;
+        }
+
+        switch (action) {
+            case 'in': {
+                if (w < origW * 0.25) return;
+                const cx = x + w / 2, cy = y + h / 2;
+                w *= 0.8; h *= 0.8;
+                x = cx - w / 2; y = cy - h / 2;
+                break;
+            }
+            case 'out': {
+                if (w > origW * 4) return;
+                const cx = x + w / 2, cy = y + h / 2;
+                w *= 1.25; h *= 1.25;
+                x = cx - w / 2; y = cy - h / 2;
+                break;
+            }
+            case 'reset':
+                x = 0; y = 0; w = origW; h = origH;
+                break;
+        }
+
+        svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+    }
+
+    // ──────────────────────────────────────────────
+    // UTILITIES
+    // ──────────────────────────────────────────────
+
+    _bindDaxToggles(container) {
+        const root = container || document;
+        if (root._daxToggleBound) return;
+        root._daxToggleBound = true;
+        root.addEventListener('click', (e) => {
+            const btn = e.target.closest('.btn-dax-toggle');
+            if (!btn) return;
+            const block = document.getElementById(btn.dataset.target);
+            if (!block) return;
+            const isTruncated = block.classList.contains('truncated');
+            block.classList.toggle('truncated');
+            btn.textContent = isTruncated ? 'Show less' : 'Show more';
+        });
+    }
+
+    showErrorModal() {
+        const modal = document.getElementById('errorModal');
+        const body = document.getElementById('errorModalBody');
+        let html = '';
+        for (const err of this.parseErrors) {
+            html += `<div class="error-modal-item">
+                <span class="error-file">${this._esc(err.file)}</span>
+                ${err.line != null ? `<span class="error-line">Line ${err.line}</span>` : ''}
+                <div class="error-message">${this._esc(err.message)}</div>
+            </div>`;
+        }
+        body.innerHTML = html;
+        modal.classList.remove('hidden');
+    }
+
+    hideErrorModal() {
+        document.getElementById('errorModal').classList.add('hidden');
+    }
+
+    copyErrorDetails() {
+        const text = this.parseErrors.map(e =>
+            `File: ${e.file}${e.line != null ? ` (Line ${e.line})` : ''}\nError: ${e.message}`
+        ).join('\n\n');
+        navigator.clipboard.writeText(text).then(() => {
+            this.showToast('Error details copied to clipboard');
+        });
+    }
+
+    _showValueMomentToast() {
+        // Don't show if sponsor toast already shown this session
+        if (sessionStorage.getItem('sponsor_toast_shown') === '1') return;
+        if (!this.parsedModel) return;
+        const m = this.parsedModel;
+        const tables = m.tables.length;
+        const measures = m.tables.reduce((sum, t) => sum + t.measures.length, 0);
+        if (tables < 10 && measures < 20) return;
+        setTimeout(() => {
+            this.showToast(`Documented ${tables} tables and ${measures} measures in one click. Consider supporting development.`, '', 8000);
+        }, 5000);
+    }
+
+    _showValueMomentToast() {
+        // Don't show if sponsor toast already shown this session
+        if (sessionStorage.getItem('sponsor_toast_shown') === '1') return;
+        if (!this.parsedModel) return;
+        const m = this.parsedModel;
+        const tables = m.tables.length;
+        const measures = m.tables.reduce((sum, t) => sum + t.measures.length, 0);
+        if (tables < 10 && measures < 20) return;
+        setTimeout(() => {
+            this.showToast(`Documented ${tables} tables and ${measures} measures in one click. Consider supporting development.`, '', 8000);
+        }, 5000);
+    }
+
+    // ──────────────────────────────────────────────
+    // BEST PRACTICE ANALYZER (BPA) METHODS
+    // ──────────────────────────────────────────────
+
+    renderBPA() {
+        if (!this.bpaResults) {
+            this.bpaResults = BPAEngine.evaluate(this.parsedModel);
+        }
+
+        const results = this.bpaResults;
+
+        // Score circle & text
+        const scoreNumEl = document.getElementById('bpaScoreNumber');
+        const scoreRingEl = document.getElementById('bpaScoreRing');
+        if (scoreNumEl) scoreNumEl.textContent = results.score;
+        if (scoreRingEl) {
+            const circumference = 339.292;
+            const offset = circumference * (1 - (results.score / 100));
+            scoreRingEl.style.strokeDashoffset = offset;
+            
+            // Set ring color based on compliance
+            if (results.score >= 90) {
+                scoreRingEl.style.stroke = '#86BC25'; // Deloitte Green
+            } else if (results.score >= 70) {
+                scoreRingEl.style.stroke = '#ffb81c'; // Amber
+            } else {
+                scoreRingEl.style.stroke = '#da291c'; // Red
+            }
+        }
+
+        // Stats boxes
+        const criticalEl = document.getElementById('bpaCountCritical');
+        const warningEl = document.getElementById('bpaCountWarning');
+        const infoEl = document.getElementById('bpaCountInfo');
+        if (criticalEl) criticalEl.textContent = results.stats.critical;
+        if (warningEl) warningEl.textContent = results.stats.warning;
+        if (infoEl) infoEl.textContent = results.stats.info;
+
+        // Update filters with actual counts
+        const allBtn = document.querySelector('.btn-filter-bpa[data-severity="all"]');
+        const critBtn = document.querySelector('.btn-filter-bpa[data-severity="critical"]');
+        const warnBtn = document.querySelector('.btn-filter-bpa[data-severity="warning"]');
+        const infoBtn = document.querySelector('.btn-filter-bpa[data-severity="info"]');
+
+        if (allBtn) allBtn.innerHTML = `All (${results.findings.length})`;
+        if (critBtn) critBtn.innerHTML = `Critical (${results.stats.critical})`;
+        if (warnBtn) warnBtn.innerHTML = `Warning (${results.stats.warning})`;
+        if (infoBtn) infoBtn.innerHTML = `Info (${results.stats.info})`;
+
+        // Reset filter button active state
+        document.querySelectorAll('.btn-filter-bpa').forEach(btn => {
+            if (btn.dataset.severity === 'all') {
+                btn.classList.add('active');
+                btn.style.background = 'var(--primary)';
+                btn.style.color = '#fff';
+            } else {
+                btn.classList.remove('active');
+                btn.style.background = '';
+                btn.style.color = '';
+            }
+        });
+
+        this.filterBPAFindings('all');
+    }
+
+    filterBPAFindings(severity) {
+        const container = document.getElementById('bpaFindingsContainer');
+        if (!container) return;
+
+        if (!this.bpaResults || !this.bpaResults.findings) {
+            container.innerHTML = '<p class="placeholder">No rule violations found.</p>';
+            return;
+        }
+
+        const findings = this.bpaResults.findings;
+        const filtered = findings.filter(f => {
+            if (severity === 'all') return true;
+            if (severity === 'critical') return f.severity === 3;
+            if (severity === 'warning') return f.severity === 2;
+            if (severity === 'info') return f.severity === 1;
+            return true;
+        });
+
+        if (filtered.length === 0) {
+            container.innerHTML = '<p class="placeholder" style="padding:40px; text-align:center; color:var(--text-light)">No rule violations found with this severity criteria.</p>';
+            return;
+        }
+
+        // Sort: Critical (3) down to Info (1)
+        filtered.sort((a, b) => b.severity - a.severity);
+
+        let html = '';
+        filtered.forEach(f => {
+            const sevText = f.severity === 3 ? 'Critical' : f.severity === 2 ? 'Warning' : 'Info';
+            const sevClass = f.severity === 3 ? 'sev-3' : f.severity === 2 ? 'sev-2' : 'sev-1';
+            
+            html += `
+            <div class="bpa-finding-group ${sevClass}" data-rule-id="${this._esc(f.id)}">
+                <div class="bpa-finding-header">
+                    <span class="bpa-severity-badge ${sevClass}">${this._esc(sevText)}</span>
+                    <h4>${this._esc(f.name)}</h4>
+                    <span style="font-size:11px; color:var(--text-light); margin-left:auto; display:flex; align-items:center; gap:4px">
+                        <span class="material-symbols-outlined" style="font-size:14px">menu_book</span> Learn more
+                    </span>
+                </div>
+                <div class="bpa-finding-body">
+                    ${this._esc(f.message)}
+                </div>
+                <div class="bpa-finding-context">
+                    <div class="bpa-finding-context-item">
+                        <span class="material-symbols-outlined" style="font-size:12px">category</span>
+                        <span>${this._esc(f.category)}</span>
+                    </div>
+                    ${f.table && f.table !== 'Global' ? `
+                    <div class="bpa-finding-context-item filter-chip-nav" style="cursor:pointer; color:var(--accent)" data-table="${this._esc(f.table)}" data-object="${this._esc(f.object)}" title="Navigate to object">
+                        <span class="material-symbols-outlined" style="font-size:12px">table_chart</span>
+                        <span>${this._esc(f.table)} ${f.object && f.object !== f.table ? ` → ${this._esc(f.object)}` : ''}</span>
+                    </div>
+                    ` : `
+                    <div class="bpa-finding-context-item">
+                        <span class="material-symbols-outlined" style="font-size:12px">settings_suggest</span>
+                        <span>Global Model</span>
+                    </div>
+                    `}
+                </div>
+            </div>`;
+        });
+
+        container.innerHTML = html;
+
+        // Bind clicks for the navigation links specifically
+        container.querySelectorAll('.filter-chip-nav').forEach(chip => {
+            chip.addEventListener('click', (e) => {
+                e.stopPropagation(); // Avoid triggering the parent card click which opens the learn modal
+                const tbl = chip.dataset.table;
+                const obj = chip.dataset.object;
+                this.navigateFromFinding(tbl, obj);
+            });
+        });
+    }
+
+    async showBPALearningModal(ruleId) {
+        const rule = BPARules.find(r => r.ID === ruleId);
+        if (!rule) return;
+
+        const modal = document.getElementById('bpaLearningModal');
+        const backdrop = document.getElementById('bpaLearningBackdrop');
+        const modalRuleName = document.getElementById('bpaModalRuleName');
+        const modalDesc = document.getElementById('bpaModalDescription');
+        const modalContent = document.getElementById('bpaModalContent');
+
+        if (!modal || !backdrop) return;
+
+        // Set initial modal fields
+        modalRuleName.textContent = rule.Name;
+        modalDesc.innerHTML = `<span style="font-size:11px; text-transform:uppercase; color:var(--accent); display:block; margin-bottom:4px; font-weight:700">${rule.Category}</span>${this._esc(rule.Description)}`;
+        
+        modalContent.innerHTML = '<div class="loading"><div class="spinner"></div>Henter ytterligere dokumentasjon...</div>';
+
+        modal.style.display = 'flex';
+        backdrop.style.display = 'block';
+
+        // Custom mappings for rule IDs to specific local DAX docs
+        const ruleMarkdownMap = {
+            'DAX_DIVISION_COLUMNS': 'divide-function-dax.md',
+            'DAX_COLUMNS_FULLY_QUALIFIED': 'all-function-dax.md',
+            'DAX_MEASURES_UNQUALIFIED': 'allselected-function-dax.md',
+            'PERF_UNUSED_COLUMNS': 'allcrossfiltered-function-dax.md',
+        };
+
+        const targetFile = ruleMarkdownMap[ruleId];
+        
+        if (targetFile) {
+            try {
+                const response = await fetch(`bpa/dax/${targetFile}`);
+                if (!response.ok) {
+                    throw new Error('File not found');
+                }
+                const mdText = await response.text();
+                modalContent.innerHTML = this._parseMarkdownToHtml(mdText);
+            } catch (err) {
+                console.warn('Could not fetch BPA detail markdown:', err);
+                this._renderDefaultBPAExplanation(rule, modalContent);
+            }
+        } else {
+            this._renderDefaultBPAExplanation(rule, modalContent);
+        }
+    }
+
+    hideBPALearningModal() {
+        const modal = document.getElementById('bpaLearningModal');
+        const backdrop = document.getElementById('bpaLearningBackdrop');
+        if (modal) modal.style.display = 'none';
+        if (backdrop) backdrop.style.display = 'none';
+    }
+
+    _renderDefaultBPAExplanation(rule, container) {
+        // Render a beautiful detailed local explanation as a fallback
+        let html = `
+        <h3 style="color:var(--text); margin-top:20px; font-size:16px;">Why is this important?</h3>
+        <p style="line-height:1.6; margin-bottom:12px;">${this._esc(rule.Description)}</p>
+        
+        <h3 style="color:var(--text); margin-top:20px; font-size:16px;">Recommended Solution</h3>
+        <p style="line-height:1.6; margin-bottom:12px;">Review the highlighted objects and verify they comply with modeling standards:</p>
+        <ul style="margin-left: 20px; line-height: 1.6; margin-bottom: 20px;">
+            <li style="list-style-type:disc; margin-bottom:6px;"><strong>Rule ID:</strong> <code>${this._esc(rule.ID)}</code></li>
+            <li style="list-style-type:disc; margin-bottom:6px;"><strong>Severity:</strong> ${rule.Severity === 3 ? '<span style="color:#da291c; font-weight:700">Critical</span>' : rule.Severity === 2 ? '<span style="color:#ffb81c; font-weight:700">Warning</span>' : '<span style="color:#00a3e0; font-weight:700">Info</span>'}</li>
+            <li style="list-style-type:disc; margin-bottom:6px;"><strong>Category:</strong> ${this._esc(rule.Category)}</li>
+            <li style="list-style-type:disc; margin-bottom:6px;"><strong>Scope:</strong> ${this._esc(rule.Scope)}</li>
+        </ul>
+        
+        <h3 style="color:var(--text); margin-top:20px; font-size:16px;">Remediation Example</h3>
+        `;
+
+        if (rule.ID === 'DAX_DIVISION_COLUMNS') {
+            html += `
+            <p style="line-height:1.6; margin-bottom:12px;">Instead of using the standard slash operator (/) which can throw errors or return empty values when dividing by zero, utilize the <code>DIVIDE</code> function:</p>
+            <pre style="background:var(--surface); padding:12px; border-radius:4px; border:1px solid var(--border-light); margin:12px 0;"><code style="font-family:Consolas,monospace;">-- Avoid this:
+SalesMargin = [NetProfit] / [TotalSales]
+
+-- Do this instead:
+SalesMargin = DIVIDE([NetProfit], [TotalSales])</code></pre>`;
+        } else if (rule.ID === 'DAX_COLUMNS_FULLY_QUALIFIED') {
+            html += `
+            <p style="line-height:1.6; margin-bottom:12px;">Columns should always be referenced with their table prefix so they are easily distinguished from measures:</p>
+            <pre style="background:var(--surface); padding:12px; border-radius:4px; border:1px solid var(--border-light); margin:12px 0;"><code style="font-family:Consolas,monospace;">-- Avoid this:
+SalesCost = SUM([Cost])
+
+-- Do this instead:
+SalesCost = SUM('Sales'[Cost])</code></pre>`;
+        } else if (rule.ID === 'DAX_MEASURES_UNQUALIFIED') {
+            html += `
+            <p style="line-height:1.6; margin-bottom:12px;">Measures should be referenced without a table prefix to indicate they are dynamic and can be placed on any visual cleanly:</p>
+            <pre style="background:var(--surface); padding:12px; border-radius:4px; border:1px solid var(--border-light); margin:12px 0;"><code style="font-family:Consolas,monospace;">-- Avoid this:
+Total_Activity = 'Sales'[Sales_Measure] + 'Costs'[Costs_Measure]
+
+-- Do this instead:
+Total_Activity = [Sales_Measure] + [Costs_Measure]</code></pre>`;
+        } else if (rule.ID === 'DISABLE_AUTO_DATE_TIME') {
+            html += `
+            <p style="line-height:1.6; margin-bottom:12px;">Power BI automatically instantiates a hidden calendar table for every single date-type field in the model if this setting is enabled. This results in heavy memory overhead and degraded performance.</p>
+            <p style="line-height:1.6; margin-bottom:12px;"><strong>How to disable this feature:</strong></p>
+            <ol style="margin-left: 20px; line-height: 1.6; margin-bottom: 20px;">
+                <li style="margin-bottom:6px;">Open your model file in Power BI Desktop</li>
+                <li style="margin-bottom:6px;">Go to <strong>File</strong> → <strong>Options and Settings</strong> → <strong>Options</strong></li>
+                <li style="margin-bottom:6px;">Under <strong>Global</strong> or <strong>Current File</strong>, select <strong>Data Load</strong></li>
+                <li style="margin-bottom:6px;">Uncheck the option for <strong>Auto Date/Time</strong></li>
+                <li style="margin-bottom:6px;">Utilize a central, specialized <code>Date</code> (Calendar) table for relationship-based time intelligence instead.</li>
+            </ol>`;
+        } else if (rule.ID === 'LAYOUT_HIDE_FK_COLUMNS') {
+            html += `
+            <p style="line-height:1.6; margin-bottom:12px;">Columns used to design relationships (such as surrogate keys or foreign keys) should be hidden in report view to prevent report builders from filtering on raw primary/foreign keys instead of descriptive dimensions.</p>
+            <p style="line-height:1.6; margin-bottom:12px;"><strong>Remediation:</strong> Set the <code>isHidden</code> property to <code>true</code> in the column's TMDL definition, or utilize 'Hide in Report View' directly inside Power BI Desktop.</p>`;
+        } else if (rule.ID === 'UPPERCASE_FIRST_LETTER') {
+            html += `
+            <p style="line-height:1.6; margin-bottom:12px;">Standardize the naming scheme of model objects to create a polished and predictable taxonomy for report builders and end-users.</p>
+            <pre style="background:var(--surface); padding:12px; border-radius:4px; border:1px solid var(--border-light); margin:12px 0;"><code style="font-family:Consolas,monospace;">-- Avoid this:
+customername, [total_sales], product_id
+
+-- Do this instead:
+CustomerName, [Total Sales], ProductID</code></pre>`;
+        } else {
+            html += `
+            <p style="line-height:1.6; margin-bottom:12px;">Verify and refine the configuration or dynamic formulas of this object inside your Power BI dataset. Follow organization-wide guidelines to guarantee alignment with production standards.</p>`;
+        }
+
+        container.innerHTML = html;
+    }
+
+    _parseMarkdownToHtml(md) {
+        if (!md) return '';
+        // Strip frontmatter
+        let html = md.replace(/^---[\s\S]*?---/g, '');
+
+        // Strip [!INCLUDE...] blocks
+        html = html.replace(/\[!INCLUDE\[.*?\]\((.*?)\)\]/g, '');
+
+        // Replace code blocks
+        html = html.replace(/```(?:dax|powerquery|m|json|javascript)?([\s\S]*?)```/g, '<pre style="background:var(--surface); padding:12px; border-radius:4px; border:1px solid var(--border-light); margin:12px 0; overflow-x:auto;"><code style="font-family:Consolas,monospace; font-size:13px;">$1</code></pre>');
+
+        // Heading lines
+        html = html.replace(/^# (.*?)$/gm, '<h1 style="color:var(--text); margin-top:24px; margin-bottom:12px; font-size:20px; border-bottom:1px solid var(--border-light); padding-bottom:6px;">$1</h1>');
+        html = html.replace(/^## (.*?)$/gm, '<h2 style="color:var(--text); margin-top:20px; margin-bottom:10px; font-size:16px; border-bottom:1px solid var(--border-light); padding-bottom:4px;">$1</h2>');
+        html = html.replace(/^### (.*?)$/gm, '<h3 style="color:var(--text); margin-top:16px; margin-bottom:8px; font-size:14px;">$1</h3>');
+        html = html.replace(/^#### (.*?)$/gm, '<h4 style="color:var(--text); margin-top:12px; margin-bottom:6px; font-size:13px;">$1</h4>');
+
+        // Bold / italic
+        html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+        // Inline code
+        html = html.replace(/`(.*?)`/g, '<code style="background:var(--surface); font-family:Consolas,monospace; padding:2px 4px; font-size:13px; border-radius:3px;">$1</code>');
+
+        // Simple table parser
+        const lines = html.split('\n');
+        let inTable = false;
+        let tableHtml = '';
+        const outputLines = [];
+
+        for (let line of lines) {
+            let trimmed = line.trim();
+            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+                if (!inTable) {
+                    inTable = true;
+                    tableHtml = '<table style="width:100%; border-collapse:collapse; margin:16px 0;"><thead>';
+                }
+                
+                // Extract cells
+                const cells = trimmed.split('|').slice(1, -1).map(c => c.trim());
+                
+                if (line.includes('---')) {
+                    // Divider line
+                    tableHtml = tableHtml.replace('<thead>', '<tbody>');
+                    continue;
+                }
+
+                // Render row
+                const isHeader = !tableHtml.includes('<tbody>');
+                const tag = isHeader ? 'th' : 'td';
+                const style = isHeader 
+                    ? 'border:1px solid var(--border-light); padding:10px; background:var(--surface); font-weight:700; text-align:left; color:var(--text);' 
+                    : 'border:1px solid var(--border-light); padding:10px; color:var(--text-secondary);';
+                tableHtml += '<tr>' + cells.map(c => `<${tag} style="${style}">${c}</${tag}>`).join('') + '</tr>';
+            } else {
+                if (inTable) {
+                    inTable = false;
+                    tableHtml += '</tbody></table>';
+                    outputLines.push(tableHtml);
+                    tableHtml = '';
+                }
+                outputLines.push(line);
+            }
+        }
+        if (inTable) {
+            tableHtml += '</tbody></table>';
+            outputLines.push(tableHtml);
+        }
+
+        html = outputLines.join('\n');
+
+        // Bullet points
+        html = html.replace(/^\s*-\s+(.*?)$/gm, '<li style="margin-left: 20px; list-style-type: disc; margin-bottom:6px; color:var(--text-secondary);">$1</li>');
+
+        // Double newlines to paragraphs (skip pre blocks and tables)
+        const parts = html.split(/(<pre[\s\S]*?<\/pre>|<table[\s\S]*?<\/table>)/g);
+        for (let i = 0; i < parts.length; i++) {
+            if (!parts[i].startsWith('<pre') && !parts[i].startsWith('<table')) {
+                parts[i] = parts[i].split('\n\n').map(p => p.trim() ? `<p style="margin-bottom:12px; line-height:1.6; color:var(--text-secondary);">${p}</p>` : '').join('');
+            }
+        }
+        html = parts.join('');
+
+        return html;
+    }
+
+    navigateFromFinding(tableName, objectName) {
+        if (!tableName || tableName === 'Global') return;
+        this.showTableDetail(tableName);
+        
+        // Let's scroll to the card with the measurement/column name
+        setTimeout(() => {
+            const h4s = Array.from(document.querySelectorAll('#tableDetailContent h4, #tableDetailContent dt, #tableDetailContent td'));
+            const targetEl = h4s.find(el => el.textContent.includes(objectName));
+            if (targetEl) {
+                targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                targetEl.style.outline = '2px solid var(--accent)';
+                targetEl.style.outlineOffset = '4px';
+                setTimeout(() => {
+                    targetEl.style.outline = '';
+                }, 3000);
+            }
+        }, 120);
+    }
+
+    showToast(message, type = '', duration = 4000) {
+        const toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast' + (type === 'error' ? ' error' : '');
+        setTimeout(() => toast.classList.add('hidden'), duration);
+    }
+
+    showLoading(show, message) {
+        const indicator = document.getElementById('loadingIndicator');
+        indicator.classList.toggle('hidden', !show);
+        if (message) {
+            const span = indicator.querySelector('span');
+            if (span) span.textContent = message;
+        }
+    }
+
+    _esc(str) {
+        if (!str) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+}
+
+// Initialize app
+document.addEventListener('DOMContentLoaded', () => {
+    window.app = new App();
+});
