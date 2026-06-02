@@ -325,6 +325,98 @@ const BPARules = [
     }
   },
   {
+    "ID": "LAYOUT_MEASURES_DF",
+    "Name": "Organize measures in display folders",
+    "Category": "Model Layout",
+    "Description": "Visible measures without a display folder are harder to find and navigate. Group related measures into display folders for better usability.",
+    "Severity": 1,
+    "Scope": "Measure",
+    "evalJS": (model) => {
+      const findings = [];
+      model.tables.forEach(t => {
+        if (t._isAutoDate) return;
+        t.measures.forEach(m => {
+          if (!m.isHidden && !m.displayFolder) {
+            findings.push({ table: t.name, object: m.name, type: 'Measure', message: `Measure [${m.name}] is visible but has no display folder.` });
+          }
+        });
+      });
+      return findings;
+    }
+  },
+  {
+    "ID": "NO_CAMELCASE_MEASURES_TABLES",
+    "Name": "Avoid camelCase on visible measures and tables",
+    "Category": "Naming Convention",
+    "Description": "Visible measures and tables should use Title Case or spaces rather than camelCase to improve readability in the Power BI field list.",
+    "Severity": 2,
+    "Scope": "Measure, Table",
+    "evalJS": (model) => {
+      const findings = [];
+      const isCamelCase = (name) => /[a-z][A-Z]/.test(name);
+      model.tables.forEach(t => {
+        if (t._isAutoDate) return;
+        if (isCamelCase(t.name)) {
+          findings.push({ table: t.name, object: t.name, type: 'Table', message: `Table [${t.name}] uses camelCase naming.` });
+        }
+        t.measures.forEach(m => {
+          if (!m.isHidden && isCamelCase(m.name)) {
+            findings.push({ table: t.name, object: m.name, type: 'Measure', message: `Measure [${m.name}] uses camelCase naming.` });
+          }
+        });
+      });
+      return findings;
+    }
+  },
+  {
+    "ID": "NO_CAMELCASE_COLUMNS_HIERARCHIES",
+    "Name": "Avoid camelCase on visible columns and hierarchies",
+    "Category": "Naming Convention",
+    "Description": "Visible columns and hierarchy levels should use Title Case or spaces rather than camelCase to improve readability in the Power BI field list.",
+    "Severity": 2,
+    "Scope": "Column",
+    "evalJS": (model) => {
+      const findings = [];
+      const isCamelCase = (name) => /[a-z][A-Z]/.test(name);
+      model.tables.forEach(t => {
+        if (t._isAutoDate) return;
+        t.columns.forEach(c => {
+          if (!c.isHidden && isCamelCase(c.name)) {
+            findings.push({ table: t.name, object: c.name, type: 'Column', message: `Column [${c.name}] uses camelCase naming.` });
+          }
+        });
+        (t.hierarchies || []).forEach(h => {
+          if (!h.isHidden && isCamelCase(h.name)) {
+            findings.push({ table: t.name, object: h.name, type: 'Hierarchy', message: `Hierarchy [${h.name}] uses camelCase naming.` });
+          }
+        });
+      });
+      return findings;
+    }
+  },
+  {
+    "ID": "RELATIONSHIP_COLUMN_NAMES",
+    "Name": "Names of columns in relationships should be the same",
+    "Category": "Naming Convention",
+    "Description": "When two columns are related, their names should ideally match to make the data model easier to understand and navigate.",
+    "Severity": 2,
+    "Scope": "Relationship",
+    "evalJS": (model) => {
+      const findings = [];
+      model.relationships.forEach(rel => {
+        if (rel.fromColumn !== rel.toColumn) {
+          findings.push({
+            table: rel.fromTable,
+            object: `${rel.fromTable}[${rel.fromColumn}] → ${rel.toTable}[${rel.toColumn}]`,
+            type: 'Relationship',
+            message: `Relationship column name mismatch: [${rel.fromColumn}] → [${rel.toColumn}]. Consider renaming columns to match.`
+          });
+        }
+      });
+      return findings;
+    }
+  },
+  {
     "ID": "DISABLE_AUTO_DATE_TIME",
     "Name": "Disable Auto Date/Time",
     "Category": "Model Layout",

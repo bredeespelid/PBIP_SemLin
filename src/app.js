@@ -139,6 +139,12 @@ class App {
             }
         });
 
+        // DAX function doc popups (delegated)
+        document.addEventListener('click', (e) => {
+            const fn = e.target.closest('.dax-fn');
+            if (fn) this.showDaxFunctionModal(fn.dataset.fn);
+        });
+
         // Error modal bindings
         document.getElementById('errorModalClose').addEventListener('click', () => this.hideErrorModal());
         document.querySelector('.error-modal-backdrop').addEventListener('click', () => this.hideErrorModal());
@@ -1729,7 +1735,7 @@ class App {
                     const lines = expr.expression.split('\n');
                     const shouldTruncate = lines.length > 5;
                     const daxId = `dax-${Math.random().toString(36).substr(2, 9)}`;
-                    html += `<div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${daxId}">${this._esc(expr.expression)}</div>`;
+                    html += `<div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${daxId}">${this._highlightDax(expr.expression)}</div>`;
                     if (shouldTruncate) html += `<button type="button" class="btn-dax-toggle" data-target="${daxId}">Show more</button>`;
                 }
             }
@@ -3225,7 +3231,7 @@ class App {
             const lines = measure.expression.split('\n');
             const shouldTruncate = lines.length > 5;
             const daxId = `dax-${Math.random().toString(36).substr(2, 9)}`;
-            html += `<div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${daxId}">${this._esc(measure.expression)}</div>`;
+            html += `<div class="dax-block${shouldTruncate ? ' truncated' : ''}" id="${daxId}">${this._highlightDax(measure.expression)}</div>`;
             if (shouldTruncate) {
                 html += `<button type="button" class="btn-dax-toggle" data-target="${daxId}">Show more</button>`;
             }
@@ -3970,6 +3976,45 @@ CustomerName, [Total Sales], ProductID</code></pre>`;
         }
 
         container.innerHTML = html;
+    }
+
+    _highlightDax(expr) {
+        const fnPattern = /\b([A-Z][A-Z0-9_\.]*)\s*(?=\()/g;
+        let result = '';
+        let lastIndex = 0;
+        let match;
+        while ((match = fnPattern.exec(expr)) !== null) {
+            result += this._esc(expr.slice(lastIndex, match.index));
+            const fn = match[1];
+            result += `<span class="dax-fn" data-fn="${fn.toLowerCase()}" title="${fn} — click for docs">${this._esc(fn)}</span>`;
+            lastIndex = match.index + fn.length;
+        }
+        result += this._esc(expr.slice(lastIndex));
+        return result;
+    }
+
+    async showDaxFunctionModal(fnName) {
+        const modal = document.getElementById('bpaLearningModal');
+        const backdrop = document.getElementById('bpaLearningBackdrop');
+        if (!modal || !backdrop) return;
+
+        document.getElementById('bpaModalRuleName').textContent = fnName.toUpperCase();
+        document.getElementById('bpaModalDescription').innerHTML =
+            `<span style="font-size:11px;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:4px;font-weight:700">DAX Function Reference</span>`;
+        document.getElementById('bpaModalContent').innerHTML =
+            '<div class="loading"><div class="spinner"></div>Henter dokumentasjon...</div>';
+        modal.style.display = 'flex';
+        backdrop.style.display = 'block';
+
+        try {
+            const response = await fetch(`docs/bpa/dax/${fnName}-function-dax.md`);
+            if (!response.ok) throw new Error('not found');
+            const md = await response.text();
+            document.getElementById('bpaModalContent').innerHTML = this._parseMarkdownToHtml(md);
+        } catch {
+            document.getElementById('bpaModalContent').innerHTML =
+                `<p style="color:var(--text-secondary)">Ingen dokumentasjon tilgjengelig for <strong>${this._esc(fnName.toUpperCase())}</strong>.</p>`;
+        }
     }
 
     _parseMarkdownToHtml(md) {

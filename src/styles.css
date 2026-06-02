@@ -3393,3 +3393,20 @@ tr:hover {
     margin-top: 2px;
     word-break: break-all;
 }
+
+/* ── DAX function highlights ───────────────────── */
+.dax-fn {
+    color: #569cd6;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: background 0.1s;
+}
+
+.dax-fn:hover {
+    background: rgba(86, 156, 214, 0.15);
+    text-decoration: underline;
+}
+
+[data-theme="dark"] .dax-fn {
+    color: #9cdcfe;
+}
