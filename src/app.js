@@ -25,6 +25,7 @@ class App {
         this._dynamicPromptShown = false;
         this._milestoneDismissed = false;
 
+        this.themeData = null;
         this.parseErrors = [];
 
         this.init();
@@ -616,6 +617,8 @@ class App {
         const searchInput = document.getElementById('sidebarSearch');
         if (searchInput) searchInput.value = '';
 
+        this.themeData = null;
+
         // Null out static M-parser cache so it doesn't bleed across datasets
         if (typeof MExpressionParser !== 'undefined') MExpressionParser._declaredParams = null;
     }
@@ -642,8 +645,9 @@ class App {
             // Extract DAX references
             this.measureRefs = parser.extractAllReferences();
 
-            // Parse visuals if report folder exists
+            // Parse visuals and theme if report folder exists
             this.visualData = null;
+            this.themeData = null;
             if (this.reportHandle) {
                 try {
                     const reportPages = await this.readReportFiles();
@@ -652,6 +656,8 @@ class App {
                 } catch (err) {
                     console.warn('Could not parse report visuals:', err);
                 }
+                const themes = await this.readThemeFiles();
+                if (themes.length > 0) this.themeData = themes[0];
             }
 
             // Build lineage engine
@@ -952,6 +958,29 @@ class App {
         return await file.text();
     }
 
+    async readThemeFiles() {
+        if (!this.reportHandle) return [];
+        const themes = [];
+        try {
+            const staticHandle = await this.reportHandle.getDirectoryHandle('StaticResources');
+            const sharedHandle = await staticHandle.getDirectoryHandle('SharedResources');
+            const baseHandle = await sharedHandle.getDirectoryHandle('BaseThemes');
+            for await (const entry of baseHandle.values()) {
+                if (entry.kind === 'file' && entry.name.endsWith('.json')) {
+                    try {
+                        const content = await this.readFile(entry);
+                        themes.push(JSON.parse(content));
+                    } catch {
+                        // skip unreadable theme files
+                    }
+                }
+            }
+        } catch {
+            // no theme folder present
+        }
+        return themes;
+    }
+
     // ──────────────────────────────────────────────
     // UI UPDATES
     // ──────────────────────────────────────────────
@@ -1072,6 +1101,8 @@ class App {
         const dynamicSummary = this._getDynamicFeaturesSummary();
         document.getElementById('sidebarDynamicSection').classList.toggle('hidden', dynamicSummary.total === 0);
         document.getElementById('sidebarDynamicCount').textContent = dynamicSummary.total;
+
+        document.getElementById('sidebarThemeSection').classList.toggle('hidden', !this.themeData);
     }
 
     filterSidebar(query) {
@@ -1181,6 +1212,7 @@ class App {
         if (section === 'lineage') this.renderLineageView();
         if (section === 'data-sources') this.renderDataSourcesView();
         if (section === 'dynamic-features') this.renderDynamicFeaturesView();
+        if (section === 'theme') this.renderThemeView();
 
         // Milestone tracking for sponsor prompt
         this._trackMilestone(section);
@@ -1706,6 +1738,93 @@ class App {
         const expressionsEl = document.getElementById('expressionsContent');
         expressionsEl.innerHTML = html;
         this._bindDaxToggles(expressionsEl);
+    }
+
+    renderThemeView() {
+        const t = this.themeData;
+        if (!t) {
+            document.getElementById('themeContent').innerHTML =
+                '<p class="placeholder">No theme file found in this report.</p>';
+            return;
+        }
+
+        const swatch = (color) =>
+            `<span class="theme-swatch" style="background:${this._esc(color)}" title="${this._esc(color)}"></span>`;
+
+        const colorRow = (label, color) => color
+            ? `<tr><td>${label}</td><td>${swatch(color)}</td><td><code>${this._esc(color)}</code></td></tr>`
+            : '';
+
+        let html = `<p class="section-subtitle">Theme: <strong>${this._esc(t.name || 'Unnamed')}</strong></p>`;
+
+        // Data colors palette
+        if (Array.isArray(t.dataColors) && t.dataColors.length > 0) {
+            html += `<h3>Data Colors <span class="badge">${t.dataColors.length}</span></h3>`;
+            html += `<div class="theme-palette">`;
+            t.dataColors.forEach((c, i) => {
+                html += `<div class="theme-palette-item">
+                    <span class="theme-swatch theme-swatch-lg" style="background:${this._esc(c)}"></span>
+                    <span class="theme-palette-label">${this._esc(c)}</span>
+                </div>`;
+            });
+            html += `</div>`;
+        }
+
+        // Semantic colors
+        const semanticColors = [
+            ['Foreground', t.foreground],
+            ['Foreground Secondary', t.foregroundNeutralSecondary],
+            ['Foreground Tertiary', t.foregroundNeutralTertiary],
+            ['Background', t.background],
+            ['Background Light', t.backgroundLight],
+            ['Background Neutral', t.backgroundNeutral],
+            ['Table Accent', t.tableAccent],
+            ['Hyperlink', t.hyperlink],
+        ].filter(([, v]) => v);
+
+        if (semanticColors.length > 0) {
+            html += `<h3>Semantic Colors</h3><table><tr><th>Role</th><th></th><th>Value</th></tr>`;
+            semanticColors.forEach(([label, color]) => { html += colorRow(label, color); });
+            html += `</table>`;
+        }
+
+        // Status & KPI colors
+        const statusColors = [
+            ['Good', t.good],
+            ['Neutral', t.neutral],
+            ['Bad', t.bad],
+            ['Maximum', t.maximum],
+            ['Center', t.center],
+            ['Minimum', t.minimum],
+            ['Null', t.null],
+        ].filter(([, v]) => v);
+
+        if (statusColors.length > 0) {
+            html += `<h3>Status &amp; KPI Colors</h3><table><tr><th>Role</th><th></th><th>Value</th></tr>`;
+            statusColors.forEach(([label, color]) => { html += colorRow(label, color); });
+            html += `</table>`;
+        }
+
+        // Text classes
+        if (t.textClasses && Object.keys(t.textClasses).length > 0) {
+            html += `<h3>Text Classes</h3><table><tr><th>Class</th><th>Font</th><th>Size</th><th>Bold</th><th>Color</th></tr>`;
+            for (const [cls, def] of Object.entries(t.textClasses)) {
+                const font = def.fontFace || def.fontFamily || '';
+                const size = def.fontSize != null ? `${def.fontSize}pt` : '';
+                const bold = def.bold ? 'Yes' : '';
+                const color = def.color || '';
+                html += `<tr>
+                    <td><strong>${this._esc(cls)}</strong></td>
+                    <td>${this._esc(font)}</td>
+                    <td>${this._esc(size)}</td>
+                    <td>${bold}</td>
+                    <td>${color ? swatch(color) + ' <code>' + this._esc(color) + '</code>' : ''}</td>
+                </tr>`;
+            }
+            html += `</table>`;
+        }
+
+        document.getElementById('themeContent').innerHTML = html;
     }
 
     _bindTraceButtonDelegation() {

@@ -3353,3 +3353,43 @@ tr:hover {
     gap: 4px;
     padding: 4px 0;
 }
+
+/* ── Theme View ────────────────────────────────── */
+.theme-swatch {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    border: 1px solid rgba(128,128,128,0.3);
+    vertical-align: middle;
+}
+
+.theme-swatch-lg {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.theme-palette {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 24px;
+}
+
+.theme-palette-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 52px;
+}
+
+.theme-palette-label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin-top: 2px;
+    word-break: break-all;
+}
