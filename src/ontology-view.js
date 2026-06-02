@@ -384,11 +384,16 @@ class OntologyRenderer {
                 node.satellites = this._buildSatellites(node);
             }
             node.satellites.forEach(sat => {
+                const vis = this._satVisible(node, sat);
                 if (!sat._grp) {
                     this._createSatelliteElement(sat, node, container);
+                    if (!vis) {
+                        sat._grp.style.display = 'none';
+                        if (sat._spoke) sat._spoke.style.display = 'none';
+                    }
                 } else {
-                    sat._grp.style.display  = '';
-                    if (sat._spoke) sat._spoke.style.display = '';
+                    sat._grp.style.display  = vis ? '' : 'none';
+                    if (sat._spoke) sat._spoke.style.display = vis ? '' : 'none';
                 }
             });
             this._alpha = Math.max(this._alpha, 0.35); // re-energize so neighbours make room
@@ -987,6 +992,13 @@ class OntologyRenderer {
         return true;
     }
 
+    // Should a satellite be visible given the current report filter?
+    _satVisible(parentNode, sat) {
+        if (!this._reportFilter) return true;
+        if (sat.type === 'more-cols' || sat.type === 'more-msrs') return true;
+        return this._reportUsedSet.has(`${parentNode.name}::${sat.name}`);
+    }
+
     // Apply all visibility rules to every node and edge DOM element
     _applyNodeVisibility() {
         this._nodes.forEach(n => {
@@ -999,6 +1011,14 @@ class OntologyRenderer {
                     if (sat._spoke) sat._spoke.style.display = 'none';
                 });
                 if (n._expandDot) n._expandDot.setAttribute('fill', 'white');
+            } else if (vis && n.expanded) {
+                // Re-evaluate per-satellite filter whenever visibility state changes
+                n.satellites.forEach(sat => {
+                    if (!sat._grp) return;
+                    const satVis = this._satVisible(n, sat);
+                    sat._grp.style.display   = satVis ? '' : 'none';
+                    if (sat._spoke) sat._spoke.style.display = satVis ? '' : 'none';
+                });
             }
         });
         this._edges.forEach(e => {
