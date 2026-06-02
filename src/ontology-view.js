@@ -389,12 +389,15 @@ class OntologyRenderer {
     _createSatelliteElement(sat, parentNode, container) {
         const R = sat.radius;
 
-        // Spoke (dashed line from parent to satellite)
-        const spoke = this._mkSVG('line', {
-            stroke: parentNode.color, 'stroke-width': '1',
-            'stroke-dasharray': '3,3', opacity: '0.35'
-        });
-        this._spokesLayer.appendChild(spoke);
+        // Spoke (dashed line from parent to satellite) — columns only; measures connect via arc edges
+        let spoke = null;
+        if (sat.type !== 'measure') {
+            spoke = this._mkSVG('line', {
+                stroke: parentNode.color, 'stroke-width': '1',
+                'stroke-dasharray': '3,3', opacity: '0.35'
+            });
+            this._spokesLayer.appendChild(spoke);
+        }
         sat._spoke = spoke;
 
         const grp = this._mkSVG('g');
