@@ -43,6 +43,8 @@ class DiagramRenderer {
         if (existingSvg) existingSvg.remove();
         const existingPlaceholder = this.container.querySelector('p');
         if (existingPlaceholder) existingPlaceholder.remove();
+        const existingLoading = this.container.querySelector('.loading');
+        if (existingLoading) existingLoading.remove();
 
         if (tables.length === 0) {
             const p = document.createElement('p');

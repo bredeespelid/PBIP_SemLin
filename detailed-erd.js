@@ -137,6 +137,9 @@ class DetailedERDRenderer {
         this._drawLegend(svg, svgWidth, svgHeight);
 
         this.container.appendChild(svg);
+        const loadingEl = this.container.querySelector('.loading');
+        if (loadingEl) loadingEl.remove();
+
 
         // Initialize interactivity (zoom, pan, hover)
         this._initInteractivity(svg, svgWidth, svgHeight);
