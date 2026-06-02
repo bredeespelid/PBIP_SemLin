@@ -3880,13 +3880,11 @@ svg{max-width:100%;height:auto}
         };
 
         const targetFile = ruleMarkdownMap[ruleId];
-        
-        if (targetFile) {
+
+        if (targetFile && window.location.protocol !== 'file:') {
             try {
                 const response = await fetch(`docs/bpa/dax/${targetFile}`);
-                if (!response.ok) {
-                    throw new Error('File not found');
-                }
+                if (!response.ok) throw new Error('File not found');
                 const mdText = await response.text();
                 modalContent.innerHTML = this._parseMarkdownToHtml(mdText);
             } catch (err) {
@@ -4005,6 +4003,12 @@ CustomerName, [Total Sales], ProductID</code></pre>`;
             '<div class="loading"><div class="spinner"></div>Henter dokumentasjon...</div>';
         modal.style.display = 'flex';
         backdrop.style.display = 'block';
+
+        if (window.location.protocol === 'file:') {
+            document.getElementById('bpaModalContent').innerHTML =
+                `<p style="color:var(--text-secondary)">Funksjonsdokumentasjon krever at appen kjøres fra en lokal server eller GitHub Pages.<br><code style="font-size:12px">python -m http.server</code></p>`;
+            return;
+        }
 
         try {
             const response = await fetch(`docs/bpa/dax/${fnName}-function-dax.md`);
