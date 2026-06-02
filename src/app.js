@@ -1200,6 +1200,11 @@ class App {
     }
 
     showSection(section) {
+        // Stop ontology animation loop when navigating away
+        if (section !== 'ontology' && this.ontologyRenderer) {
+            this.ontologyRenderer.destroy();
+        }
+
         // Hide all section views
         document.querySelectorAll('.section-view').forEach(el => el.classList.remove('active'));
 

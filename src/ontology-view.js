@@ -31,6 +31,10 @@ class OntologyRenderer {
             cancelAnimationFrame(this._animFrame);
             this._animFrame = null;
         }
+        if (this._onMouseMove) window.removeEventListener('mousemove', this._onMouseMove);
+        if (this._onMouseUp)   window.removeEventListener('mouseup',   this._onMouseUp);
+        this._onMouseMove = null;
+        this._onMouseUp   = null;
     }
 
     render(container) {
@@ -240,11 +244,11 @@ class OntologyRenderer {
 
     _colTypeColor(dt) {
         const t = (dt || '').toLowerCase();
-        if (['int64','int32','integer','double','decimal','currency','single'].includes(t)) return '#059669';
-        if (['string','text'].includes(t)) return '#0284c7';
-        if (['datetime','date','time'].includes(t)) return '#d97706';
-        if (['boolean'].includes(t)) return '#db2777';
-        return '#64748b';
+        if (['int64','int32','integer','double','decimal','currency','single'].includes(t)) return '#16a34a'; // green
+        if (['string','text'].includes(t)) return '#0891b2';                                                 // cyan — distinct from entity blue
+        if (['datetime','date','time'].includes(t)) return '#e11d48';                                        // rose-red — distinct from calc group orange
+        if (['boolean'].includes(t)) return '#f59e0b';                                                       // amber — distinct from all above
+        return '#94a3b8';
     }
 
     // ─── Expand / collapse ───────────────────────────────────────────────────
@@ -702,6 +706,8 @@ class OntologyRenderer {
             if (svg) svg.style.cursor = 'grab';
         };
 
+        this._onMouseMove = onMove;
+        this._onMouseUp   = onUp;
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup',   onUp);
 
@@ -880,10 +886,10 @@ class OntologyRenderer {
             <div class="ont-legend-sep"></div>
             <div class="ont-legend-title">Properties</div>
             ${[
-                { color: '#059669', label: 'Numeric' },
-                { color: '#0284c7', label: 'Text' },
-                { color: '#d97706', label: 'DateTime' },
-                { color: '#db2777', label: 'Boolean' },
+                { color: '#16a34a', label: 'Numeric' },
+                { color: '#0891b2', label: 'Text' },
+                { color: '#e11d48', label: 'DateTime' },
+                { color: '#f59e0b', label: 'Boolean' },
             ].map(it => `
                 <div class="ont-legend-item">
                     <svg width="10" height="10" viewBox="0 0 10 10" style="flex-shrink:0"><circle cx="5" cy="5" r="4" fill="${it.color}" opacity=".88"/></svg>
