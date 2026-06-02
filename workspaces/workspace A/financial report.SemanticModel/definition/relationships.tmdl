@@ -1,0 +1,5 @@
+relationship b303b967-d7b5-46f8-92b7-e342270418f0
+	joinOnDateBehavior: datePartOnly
+	fromColumn: financials.Date
+	toColumn: LocalDateTable_8c44b903-78d6-4c61-b341-7c5a8c4310e8.Date
+
