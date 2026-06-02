@@ -1,729 +1,729 @@
-/**
- * PBIP SemLin — Ontology View
- * Renders the semantic model as a navigable ontology graph.
- * Entity types (tables), properties (columns), KPIs (measures),
- * relationships, and data source bindings — all in one view.
- */
+'use strict';
 
 class OntologyRenderer {
     constructor(model, lineageEngine, visualData, bpaResults) {
         this.model = model;
-        this.engine = lineageEngine;
+        this.lineageEngine = lineageEngine;
         this.visualData = visualData;
         this.bpaResults = bpaResults;
-        this._cleanupFn = null;
-        this._selectedEntity = null;
-
-        this.C = {
-            entity:   '#1a3a5c',
-            fp:       '#6a1b9a',
-            cg:       '#5c3d1a',
-            hidden:   '#4a4a4a',
-            source:   '#1b5e20',
-            bg:       '#ffffff',
-            bgHidden: '#f7f7f7',
-            border:   '#d0ccc4',
-            accent:   '#86BC25',
-            text:     '#2c2c2c',
-            textSub:  '#666666',
-            warn:     '#ffb81c',
-            crit:     '#da291c',
-        };
-
-        this.NW = 230;   // node width
-        this.NH = 136;   // node height
-        this.SW = 170;   // source node width
-        this.SH = 46;    // source node height
+        this._nodes = [];
+        this._edges = [];
+        this._dragging = null;
+        this._svg = null;
+        this._root = null;
+        this._alpha = 1.0;
+        this._running = false;
+        this._animFrame = null;
+        this._tx = 0;
+        this._ty = 0;
+        this._scale = 1;
+        this._W = 900;
+        this._H = 600;
+        this._container = null;
+        this._defs = null;
     }
 
-    // ── Public entry point ────────────────────────────────────────────────────
+    destroy() {
+        this._running = false;
+        if (this._animFrame) {
+            cancelAnimationFrame(this._animFrame);
+            this._animFrame = null;
+        }
+    }
 
     render(container) {
-        if (this._cleanupFn) { this._cleanupFn(); this._cleanupFn = null; }
+        this.destroy();
+        this._container = container;
+        container.innerHTML = '';
 
-        const m = this.model;
-        const visibleTables = m.tables.filter(t => !t._isAutoDate);
+        const { nodes, edges } = this._buildGraph();
+        this._nodes = nodes;
+        this._edges = edges;
 
-        // Build enriched entity list
-        const entities = visibleTables.map(t => this._enrichTable(t));
+        const W = container.clientWidth || 900;
+        const H = container.clientHeight || 580;
+        this._W = W;
+        this._H = H;
 
-        // Build layout
-        const { positions, sourcePositions, canvasW, canvasH } =
-            this._computeLayout(entities, m.relationships);
-
-        // Clear container (keep toolbar)
-        const existingSvg = container.querySelector('svg.ontology-svg');
-        if (existingSvg) existingSvg.remove();
-        const existingPanel = container.querySelector('.ontology-detail');
-        if (existingPanel) existingPanel.remove();
-
-        // Create SVG
-        const padding = 60;
-        const svgW = canvasW + padding * 2;
-        const svgH = canvasH + padding * 2 + 80;
-
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('class', 'ontology-svg');
-        svg.setAttribute('width', svgW);
-        svg.setAttribute('height', svgH);
-        svg.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
-
-        // Arrow markers
-        this._addMarkers(svg);
-
-        // Offset group
-        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        g.setAttribute('transform', `translate(${padding}, ${padding + 40})`);
-        svg.appendChild(g);
-
-        // Draw data source nodes
-        const sourceMap = new Map();
-        sourcePositions.forEach((pos, sourceId) => {
-            const srcNode = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-            srcNode.setAttribute('class', 'ontology-source-node');
-            this._drawSourceNode(srcNode, sourceId, pos);
-            g.appendChild(srcNode);
-            sourceMap.set(sourceId, pos);
+        // Initial circular layout
+        const n = nodes.length;
+        const initR = Math.min(W, H) * 0.28;
+        nodes.forEach((node, i) => {
+            const angle = (2 * Math.PI * i / Math.max(n, 1)) - Math.PI / 2;
+            node.x = Math.cos(angle) * initR + (Math.random() - 0.5) * 20;
+            node.y = Math.sin(angle) * initR + (Math.random() - 0.5) * 20;
+            node.vx = 0;
+            node.vy = 0;
         });
 
-        // Draw source-to-entity connector lines (dashed, subtle)
-        entities.forEach(ent => {
-            if (!ent.sourceId) return;
-            const srcPos = sourceMap.get(ent.sourceId);
-            const entPos = positions.get(ent.name);
-            if (!srcPos || !entPos) return;
-            const line = this._el('line', {
-                x1: srcPos.x + this.SW / 2, y1: srcPos.y,
-                x2: entPos.x + this.NW / 2, y2: entPos.y + this.NH,
-                stroke: '#c0ccc0', 'stroke-width': 1,
-                'stroke-dasharray': '4 3', opacity: 0.5
-            });
-            g.appendChild(line);
-        });
+        const svg = this._mkSVG('svg', { width: '100%', height: '100%' });
+        svg.style.cursor = 'grab';
+        this._svg = svg;
 
-        // Draw relationship edges
-        m.relationships.forEach(rel => {
-            const fromPos = positions.get(rel.fromTable);
-            const toPos   = positions.get(rel.toTable);
-            if (!fromPos || !toPos) return;
-            this._drawRelEdge(g, rel, fromPos, toPos);
-        });
+        this._addDefs(svg);
 
-        // Draw entity nodes
-        entities.forEach(ent => {
-            const pos = positions.get(ent.name);
-            if (!pos) return;
-            const nodeG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-            nodeG.setAttribute('class', 'ontology-node');
-            nodeG.setAttribute('data-entity', ent.name);
-            nodeG.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
-            this._drawEntityNode(nodeG, ent);
-            g.appendChild(nodeG);
-        });
+        const root = this._mkSVG('g', { id: 'ont-root' });
+        svg.appendChild(root);
+        this._root = root;
+
+        const edgeLayer = this._mkSVG('g', { id: 'ont-edges' });
+        root.appendChild(edgeLayer);
+
+        const nodeLayer = this._mkSVG('g', { id: 'ont-nodes' });
+        root.appendChild(nodeLayer);
+
+        this._createEdgeElements(edgeLayer);
+        this._createNodeElements(nodeLayer, container);
 
         container.appendChild(svg);
 
-        // Detail panel placeholder
+        this._tx = 0;
+        this._ty = 0;
+        this._scale = 1;
+        this._applyRootTransform();
+
+        // Fade in
+        root.style.opacity = '0';
+        root.style.transition = 'opacity 0.5s ease';
+        requestAnimationFrame(() => { root.style.opacity = '1'; });
+
+        this._initInteraction(svg, container);
+
+        this._alpha = 1.0;
+        this._running = true;
+        this._tick();
+
+        this._addLegend(container);
+
         const panel = document.createElement('div');
-        panel.className = 'ontology-detail hidden';
+        panel.className = 'ontology-detail';
         panel.id = 'ontologyDetailPanel';
+        panel.style.display = 'none';
         container.appendChild(panel);
-
-        // Wire up zoom/pan and click handlers
-        this._initZoomPan(svg, container);
-        this._initNodeClicks(svg, entities, container);
     }
 
-    // ── Table enrichment ──────────────────────────────────────────────────────
+    _buildGraph() {
+        const model = this.model;
+        const tables = (model.tables || []).filter(t => !t._isAutoDate);
+        const bpaFindings = this.bpaResults?.findings || [];
 
-    _enrichTable(t) {
-        const bpaIssues = (this.bpaResults?.findings || [])
-            .filter(f => f.table === t.name);
-        const critCount = bpaIssues.filter(f => f.severity === 3).length;
-        const warnCount = bpaIssues.filter(f => f.severity === 2).length;
-
-        let visualCount = 0;
-        if (this.visualData) {
-            const usage = this.visualData.fieldUsageMap || {};
-            Object.keys(usage).forEach(key => {
-                if (key.startsWith(`column|${t.name}|`) || key.startsWith(`measure|${t.name}|`)) {
-                    visualCount += (usage[key] || []).length;
-                }
-            });
-        }
-
-        // Find data source via lineage engine
-        let sourceId = null;
-        let sourceName = null;
-        if (this.engine) {
-            try {
-                const srcs = this.engine.getAllDataSources();
-                const tableNode = this.engine.nodes?.get(`table:${t.name}`);
-                if (tableNode) {
-                    const edge = (this.engine.edges || []).find(e =>
-                        e.to === `table:${t.name}` && e.from.startsWith('source:')
-                    );
-                    if (edge) {
-                        const src = srcs.find(s => `source:${s.id || s.name}` === edge.from ||
-                            edge.from === `source:${s.sourceType}|${s.server || ''}|${s.database || ''}`);
-                        if (src) { sourceId = edge.from; sourceName = src.sourceType || src.name; }
-                    }
-                }
-            } catch {}
-        }
-
-        const visibleCols = t.columns.filter(c => !c.isHidden);
-        const keyCol = visibleCols.find(c => c.dataCategory === 'RowIdentifier') ||
-                       visibleCols.find(c => /^id$/i.test(c.name) || /key$/i.test(c.name));
-
-        return {
-            name: t.name,
-            description: t.description || '',
-            isHidden: t.isHidden,
-            isFP: t._isFieldParameter,
-            isCG: t._isCalcGroup,
-            columns: t.columns,
-            measures: t.measures,
-            hierarchies: t.hierarchies || [],
-            critCount,
-            warnCount,
-            visualCount,
-            sourceId,
-            sourceName,
-            keyCol: keyCol?.name || null,
+        const STYLES = {
+            entity:     { color: '#2563eb', light: '#93c5fd', dark: '#1e40af' },
+            fieldparam: { color: '#7c3aed', light: '#c4b5fd', dark: '#5b21b6' },
+            calcgroup:  { color: '#ea580c', light: '#fdba74', dark: '#9a3412' },
+            hidden:     { color: '#64748b', light: '#cbd5e1', dark: '#334155' },
         };
-    }
 
-    // ── Layout ────────────────────────────────────────────────────────────────
+        const nodes = tables.map((t) => {
+            let typeKey = 'entity';
+            if (t._isFieldParameter) typeKey = 'fieldparam';
+            else if (t._isCalcGroup) typeKey = 'calcgroup';
+            else if (t.isHidden) typeKey = 'hidden';
 
-    _computeLayout(entities, relationships) {
-        const COL_GAP = 60;
-        const ROW_GAP = 80;
-        const COLS = Math.max(1, Math.ceil(Math.sqrt(entities.length * 1.4)));
+            const s = STYLES[typeKey];
+            const cols = (t.columns || []).filter(c => !c.isHidden);
+            const measures = t.measures || [];
+            const critCount = bpaFindings.filter(f => f.table === t.name && f.severity === 3).length;
+            const warnCount = bpaFindings.filter(f => f.table === t.name && f.severity <= 2).length;
+            const complexity = Math.min(cols.length + measures.length * 1.8, 90);
+            const radius = Math.round(Math.max(32, Math.min(52, 30 + complexity * 0.22)));
 
-        // Sort: connected tables first, then by name
-        const relCount = new Map();
-        relationships.forEach(r => {
-            relCount.set(r.fromTable, (relCount.get(r.fromTable) || 0) + 1);
-            relCount.set(r.toTable,   (relCount.get(r.toTable) || 0) + 1);
-        });
-        const sorted = [...entities].sort((a, b) => {
-            const ra = relCount.get(a.name) || 0;
-            const rb = relCount.get(b.name) || 0;
-            if (rb !== ra) return rb - ra;
-            return a.name.localeCompare(b.name);
-        });
+            const words = t.name.replace(/[_-]/g, ' ').trim().split(/\s+/);
+            const initials = words.length >= 2
+                ? (words[0][0] + words[1][0]).toUpperCase()
+                : t.name.slice(0, 2).toUpperCase();
 
-        const positions = new Map();
-        sorted.forEach((ent, i) => {
-            const col = i % COLS;
-            const row = Math.floor(i / COLS);
-            positions.set(ent.name, {
-                x: col * (this.NW + COL_GAP),
-                y: row * (this.NH + ROW_GAP),
-            });
-        });
-
-        // Light spring relaxation (20 passes)
-        for (let pass = 0; pass < 20; pass++) {
-            relationships.forEach(rel => {
-                const a = positions.get(rel.fromTable);
-                const b = positions.get(rel.toTable);
-                if (!a || !b) return;
-                const dx = b.x - a.x, dy = b.y - a.y;
-                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                const ideal = this.NW + COL_GAP;
-                const force = (dist - ideal) * 0.04;
-                const fx = (dx / dist) * force;
-                const fy = (dy / dist) * force;
-                a.x += fx; a.y += fy;
-                b.x -= fx; b.y -= fy;
-            });
-            // Repulsion between all pairs
-            sorted.forEach((e1, i) => {
-                sorted.slice(i + 1).forEach(e2 => {
-                    const a = positions.get(e1.name);
-                    const b = positions.get(e2.name);
-                    const dx = b.x - a.x, dy = b.y - a.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    if (dist < this.NW + COL_GAP) {
-                        const rep = ((this.NW + COL_GAP) - dist) * 0.06;
-                        const fx = (dx / dist) * rep;
-                        const fy = (dy / dist) * rep;
-                        a.x -= fx; a.y -= fy;
-                        b.x += fx; b.y += fy;
-                    }
-                });
-            });
-        }
-
-        // Normalize: shift all to non-negative
-        let minX = Infinity, minY = Infinity;
-        positions.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); });
-        positions.forEach(p => { p.x -= minX; p.y -= minY; });
-
-        // Data source nodes: place below entities
-        const sourcePositions = new Map();
-        let maxY = 0;
-        positions.forEach(p => { maxY = Math.max(maxY, p.y + this.NH); });
-        const sourceY = maxY + 80;
-        const sources = [...new Set(entities.map(e => e.sourceId).filter(Boolean))];
-        sources.forEach((srcId, i) => {
-            sourcePositions.set(srcId, {
-                x: i * (this.SW + 30),
-                y: sourceY,
-            });
+            return {
+                id: t.name, name: t.name, table: t,
+                typeKey, ...s,
+                radius, cols, measures,
+                colCount: cols.length,
+                measureCount: measures.length,
+                critCount, warnCount,
+                initials,
+                x: 0, y: 0, vx: 0, vy: 0,
+                _pinned: false, _grp: null, _circle: null, _selected: false
+            };
         });
 
-        let maxX = 0;
-        positions.forEach(p => { maxX = Math.max(maxX, p.x + this.NW); });
-        const canvasW = Math.max(maxX, sources.length * (this.SW + 30));
-        const canvasH = sources.length > 0 ? sourceY + this.SH : maxY;
+        const idx = {};
+        nodes.forEach((n, i) => { idx[n.id] = i; });
 
-        return { positions, sourcePositions, canvasW, canvasH };
+        const edges = (model.relationships || [])
+            .map(rel => {
+                const fi = idx[rel.fromTable];
+                const ti = idx[rel.toTable];
+                if (fi == null || ti == null || fi === ti) return null;
+                const c1 = rel.fromCardinality === 'Many' ? '*' : '1';
+                const c2 = rel.toCardinality   === 'Many' ? '*' : '1';
+                return { from: fi, to: ti, rel, card: `${c1}:${c2}`, _path: null, _label: null };
+            })
+            .filter(Boolean);
+
+        return { nodes, edges };
     }
 
-    // ── SVG Drawing ───────────────────────────────────────────────────────────
+    _addDefs(svg) {
+        const defs = this._mkSVG('defs');
+        this._defs = defs;
 
-    _drawEntityNode(g, ent) {
-        const W = this.NW, H = this.NH;
-        const hH = 42; // header height
-
-        const headerColor = ent.isHidden ? this.C.hidden :
-                            ent.isFP     ? this.C.fp :
-                            ent.isCG     ? this.C.cg : this.C.entity;
-
-        // Shadow
-        g.appendChild(this._rect(3, 3, W, H, 6, 'rgba(0,0,0,0.12)', 'none'));
-        // Body bg
-        g.appendChild(this._rect(0, 0, W, H, 6, ent.isHidden ? this.C.bgHidden : this.C.bg, this.C.border));
-        // Header bg (full rounded then cut bottom corners)
-        g.appendChild(this._rect(0, 0, W, hH + 6, 6, headerColor, 'none'));
-        g.appendChild(this._rect(0, hH - 2, W, 8, 0, headerColor, 'none'));
-
-        // Type badge (top-left, tiny)
-        const badgeLabel = ent.isFP ? 'FP' : ent.isCG ? 'CG' : ent.isHidden ? '👁' : 'ENTITY';
-        const badgeW = ent.isFP || ent.isCG ? 26 : ent.isHidden ? 22 : 52;
-        g.appendChild(this._rect(8, 7, badgeW, 14, 3, 'rgba(255,255,255,0.18)', 'none'));
-        g.appendChild(this._text(8 + badgeW / 2, 18, badgeLabel,
-            { fill: '#fff', 'font-size': '9', 'font-weight': '600', 'text-anchor': 'middle', 'font-family': 'monospace' }));
-
-        // Table name
-        const maxNameLen = 22;
-        const displayName = ent.name.length > maxNameLen ? ent.name.slice(0, maxNameLen - 1) + '…' : ent.name;
-        g.appendChild(this._text(W / 2, hH - 10, displayName,
-            { fill: '#fff', 'font-size': '13', 'font-weight': '700', 'text-anchor': 'middle', 'font-family': 'sans-serif' }));
-
-        // Body lines
-        let y = hH + 14;
-
-        // Data source line
-        if (ent.sourceName) {
-            g.appendChild(this._text(12, y, `⬡ ${ent.sourceName}`,
-                { fill: this.C.source, 'font-size': '11', 'font-family': 'sans-serif' }));
-            y += 16;
-        }
-
-        // Columns + measures
-        const colStr = `${ent.columns.filter(c => !c.isHidden).length} cols`;
-        const measStr = `∑ ${ent.measures.length} measures`;
-        g.appendChild(this._text(12, y, colStr,
-            { fill: this.C.textSub, 'font-size': '11', 'font-family': 'sans-serif' }));
-        g.appendChild(this._text(W / 2 + 4, y, measStr,
-            { fill: this.C.textSub, 'font-size': '11', 'font-family': 'sans-serif' }));
-        y += 16;
-
-        // Key column
-        if (ent.keyCol) {
-            g.appendChild(this._text(12, y, `🔑 ${ent.keyCol}`,
-                { fill: this.C.textSub, 'font-size': '10', 'font-family': 'sans-serif' }));
-            y += 14;
-        }
-
-        // Description (truncated)
-        if (ent.description) {
-            const desc = ent.description.length > 32 ? ent.description.slice(0, 31) + '…' : ent.description;
-            g.appendChild(this._text(12, y, desc,
-                { fill: '#888', 'font-size': '10', 'font-style': 'italic', 'font-family': 'sans-serif' }));
-        }
-
-        // Footer divider
-        g.appendChild(this._el('line', {
-            x1: 0, y1: H - 24, x2: W, y2: H - 24,
-            stroke: this.C.border, 'stroke-width': 1
-        }));
-
-        // BPA badge
-        if (ent.critCount > 0) {
-            g.appendChild(this._rect(8, H - 20, 42, 14, 3, this.C.crit, 'none'));
-            g.appendChild(this._text(29, H - 9, `⚠ ${ent.critCount} crit`,
-                { fill: '#fff', 'font-size': '9', 'font-weight': '600', 'text-anchor': 'middle', 'font-family': 'sans-serif' }));
-        } else if (ent.warnCount > 0) {
-            g.appendChild(this._rect(8, H - 20, 40, 14, 3, this.C.warn, 'none'));
-            g.appendChild(this._text(28, H - 9, `⚠ ${ent.warnCount} warn`,
-                { fill: '#111', 'font-size': '9', 'font-weight': '600', 'text-anchor': 'middle', 'font-family': 'sans-serif' }));
-        } else {
-            g.appendChild(this._text(12, H - 9, '✓ BPA OK',
-                { fill: this.C.accent, 'font-size': '9', 'font-weight': '600', 'font-family': 'sans-serif' }));
-        }
-
-        // Visual usage badge (right)
-        if (ent.visualCount > 0) {
-            g.appendChild(this._text(W - 8, H - 9, `👁 ${ent.visualCount}`,
-                { fill: this.C.textSub, 'font-size': '10', 'text-anchor': 'end', 'font-family': 'sans-serif' }));
-        }
-    }
-
-    _drawSourceNode(g, sourceId, pos) {
-        g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
-        const label = sourceId.replace('source:', '').split('|')[0];
-        g.appendChild(this._rect(0, 0, this.SW, this.SH, 5, '#e8f5e9', '#81c784'));
-        g.appendChild(this._text(this.SW / 2, 16, '💾 DATA SOURCE',
-            { fill: this.C.source, 'font-size': '9', 'font-weight': '700', 'text-anchor': 'middle', 'font-family': 'monospace' }));
-        const display = label.length > 18 ? label.slice(0, 17) + '…' : label;
-        g.appendChild(this._text(this.SW / 2, 32, display,
-            { fill: this.C.source, 'font-size': '12', 'font-weight': '600', 'text-anchor': 'middle', 'font-family': 'sans-serif' }));
-    }
-
-    _drawRelEdge(g, rel, fromPos, toPos) {
-        const NW = this.NW, NH = this.NH;
-        // Connect center-bottom of from to center-top of to (or sides if horizontal)
-        const fx = fromPos.x + NW / 2, fy = fromPos.y + NH / 2;
-        const tx = toPos.x + NW / 2,   ty = toPos.y + NH / 2;
-
-        // Pick edge midpoints on node borders
-        const dx = tx - fx, dy = ty - fy;
-        const fromEdge = this._borderPoint(fromPos, NW, NH, dx, dy, false);
-        const toEdge   = this._borderPoint(toPos,   NW, NH, -dx, -dy, true);
-
-        const edgeG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        edgeG.setAttribute('class', 'ontology-edge');
-
-        const isManyToMany = rel.fromCardinality === 'many' && rel.toCardinality === 'many';
-        const strokeColor = isManyToMany ? '#e57373' : '#90a4ae';
-
-        const path = this._el('path', {
-            d: `M ${fromEdge.x} ${fromEdge.y} C ${(fromEdge.x + toEdge.x) / 2} ${fromEdge.y} ${(fromEdge.x + toEdge.x) / 2} ${toEdge.y} ${toEdge.x} ${toEdge.y}`,
-            stroke: strokeColor, 'stroke-width': '1.5', fill: 'none',
-            'marker-end': 'url(#ontology-arrow)',
+        // Arrowhead marker
+        const mk = this._mkSVG('marker', {
+            id: 'ont-arrow', markerWidth: '10', markerHeight: '7',
+            refX: '9', refY: '3.5', orient: 'auto'
         });
-        if (isManyToMany) path.setAttribute('stroke-dasharray', '5 3');
+        mk.appendChild(this._mkSVG('polygon', { points: '0 0,10 3.5,0 7', fill: '#94a3b8' }));
+        defs.appendChild(mk);
 
-        edgeG.appendChild(path);
+        // Glow filter (selected)
+        const fGlow = this._mkSVG('filter', { id: 'ont-glow', x: '-40%', y: '-40%', width: '180%', height: '180%' });
+        const feGB = this._mkSVG('feGaussianBlur', { stdDeviation: '7', result: 'coloredBlur' });
+        const feMerge = this._mkSVG('feMerge');
+        feMerge.appendChild(this._mkSVG('feMergeNode', { in: 'coloredBlur' }));
+        feMerge.appendChild(this._mkSVG('feMergeNode', { in: 'SourceGraphic' }));
+        fGlow.appendChild(feGB);
+        fGlow.appendChild(feMerge);
+        defs.appendChild(fGlow);
 
-        // Cardinality labels
-        const cardFrom = rel.fromCardinality === 'many' ? '*' : '1';
-        const cardTo   = rel.toCardinality   === 'many' ? '*' : '1';
-        const midX = (fromEdge.x + toEdge.x) / 2;
-        const midY = (fromEdge.y + toEdge.y) / 2;
+        // Drop shadow
+        const fShadow = this._mkSVG('filter', { id: 'ont-shadow', x: '-30%', y: '-30%', width: '160%', height: '160%' });
+        fShadow.appendChild(this._mkSVG('feDropShadow', { dx: '2', dy: '3', stdDeviation: '4', 'flood-opacity': '0.22' }));
+        defs.appendChild(fShadow);
 
-        const cardBg = this._rect(midX - 14, midY - 9, 28, 14, 3, '#fff', '#c0c0c0');
-        cardBg.setAttribute('opacity', '0.9');
-        edgeG.appendChild(cardBg);
-        edgeG.appendChild(this._text(midX, midY + 3, `${cardFrom}:${cardTo}`,
-            { fill: '#555', 'font-size': '9', 'font-weight': '600', 'text-anchor': 'middle', 'font-family': 'monospace' }));
-
-        g.appendChild(edgeG);
-    }
-
-    _borderPoint(pos, w, h, dx, dy, isTarget) {
-        const cx = pos.x + w / 2, cy = pos.y + h / 2;
-        if (Math.abs(dx) * h > Math.abs(dy) * w) {
-            // Horizontal dominant
-            const side = dx > 0 ? 1 : -1;
-            return { x: cx + side * w / 2, y: cy + dy * (w / 2) / Math.abs(dx) };
-        } else {
-            // Vertical dominant
-            const side = dy > 0 ? 1 : -1;
-            return { x: cx + dx * (h / 2) / Math.abs(dy), y: cy + side * h / 2 };
-        }
-    }
-
-    _addMarkers(svg) {
-        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-        const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-        marker.setAttribute('id', 'ontology-arrow');
-        marker.setAttribute('markerWidth', '8');
-        marker.setAttribute('markerHeight', '8');
-        marker.setAttribute('refX', '6');
-        marker.setAttribute('refY', '3');
-        marker.setAttribute('orient', 'auto');
-        const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        arrow.setAttribute('d', 'M0,0 L0,6 L8,3 z');
-        arrow.setAttribute('fill', '#90a4ae');
-        marker.appendChild(arrow);
-        defs.appendChild(marker);
         svg.appendChild(defs);
     }
 
-    // ── Zoom / Pan ────────────────────────────────────────────────────────────
+    _createNodeElements(nodeLayer, container) {
+        this._nodes.forEach((node, i) => {
+            const R = node.radius;
 
-    _initZoomPan(svg, container) {
-        const vb = { x: 0, y: 0, w: parseFloat(svg.getAttribute('width')), h: parseFloat(svg.getAttribute('height')) };
+            // Per-node radial gradient
+            const gid = `ont-grad-${i}`;
+            const grad = this._mkSVG('radialGradient', { id: gid, cx: '38%', cy: '32%', r: '68%' });
+            const s1 = this._mkSVG('stop', { offset: '0%' });
+            s1.setAttribute('stop-color', node.light);
+            const s2 = this._mkSVG('stop', { offset: '100%' });
+            s2.setAttribute('stop-color', node.dark);
+            grad.appendChild(s1);
+            grad.appendChild(s2);
+            this._defs.appendChild(grad);
 
-        const setVB = () => svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+            const grp = this._mkSVG('g');
+            grp.classList.add('ont-node-grp');
+            grp.dataset.nodeIdx = String(i);
+            grp.style.cursor = 'pointer';
 
-        const zoom = (factor, cx, cy) => {
-            if (!cx) { cx = vb.x + vb.w / 2; cy = vb.y + vb.h / 2; }
-            const nw = Math.max(200, Math.min(vb.w * factor, 8000));
-            const nh = nw * (vb.h / vb.w);
-            vb.x = cx - (cx - vb.x) * (nw / vb.w);
-            vb.y = cy - (cy - vb.y) * (nh / vb.h);
-            vb.w = nw; vb.h = nh;
-            setVB();
-        };
-
-        const zoomIn  = container.querySelector('[data-ontology-zoom="in"]');
-        const zoomOut = container.querySelector('[data-ontology-zoom="out"]');
-        const zoomReset = container.querySelector('[data-ontology-zoom="reset"]');
-        if (zoomIn)    zoomIn.addEventListener('click', () => zoom(0.7));
-        if (zoomOut)   zoomOut.addEventListener('click', () => zoom(1.4));
-        if (zoomReset) {
-            zoomReset.addEventListener('click', () => {
-                vb.x = 0; vb.y = 0;
-                vb.w = parseFloat(svg.getAttribute('width'));
-                vb.h = parseFloat(svg.getAttribute('height'));
-                setVB();
+            // Outer glow ring
+            const glowRing = this._mkSVG('circle', {
+                r: R + 9, fill: 'none',
+                stroke: node.color, 'stroke-width': '1.5',
+                opacity: '0.15'
             });
-        }
 
-        // Wheel zoom
-        const onWheel = (e) => {
-            e.preventDefault();
-            const rect = svg.getBoundingClientRect();
-            const scale = vb.w / rect.width;
-            const cx = vb.x + (e.clientX - rect.left) * scale;
-            const cy = vb.y + (e.clientY - rect.top)  * scale;
-            zoom(e.deltaY > 0 ? 1.15 : 0.87, cx, cy);
-        };
-        svg.addEventListener('wheel', onWheel, { passive: false });
+            // Shadow
+            const shadow = this._mkSVG('circle', { r: R + 2, cx: 2, cy: 4 });
+            shadow.setAttribute('fill', 'rgba(0,0,0,0.18)');
+            shadow.setAttribute('filter', 'url(#ont-shadow)');
 
-        // Pan
-        let dragging = false, lastX = 0, lastY = 0;
-        const onDown = (e) => {
-            if (e.target.closest('.ontology-node') || e.target.closest('.ontology-source-node')) return;
-            dragging = true; lastX = e.clientX; lastY = e.clientY;
-            svg.style.cursor = 'grabbing';
-        };
-        const onMove = (e) => {
-            if (!dragging) return;
-            const rect = svg.getBoundingClientRect();
-            const scale = vb.w / rect.width;
-            vb.x -= (e.clientX - lastX) * scale;
-            vb.y -= (e.clientY - lastY) * scale;
-            lastX = e.clientX; lastY = e.clientY;
-            setVB();
-        };
-        const onUp = () => { dragging = false; svg.style.cursor = 'grab'; };
+            // Main circle
+            const circle = this._mkSVG('circle', {
+                r: R, fill: `url(#${gid})`,
+                stroke: node.color, 'stroke-width': '2.5'
+            });
+            node._circle = circle;
 
-        svg.style.cursor = 'grab';
-        svg.addEventListener('mousedown', onDown);
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
+            // Initials text
+            const initText = this._mkSVG('text', {
+                'text-anchor': 'middle', 'dominant-baseline': 'central',
+                'font-size': Math.round(R * 0.5),
+                fill: 'rgba(255,255,255,0.95)',
+                'pointer-events': 'none',
+                'font-weight': '700',
+                'font-family': 'system-ui,-apple-system,sans-serif',
+                y: node.measureCount > 0 ? -5 : 0
+            });
+            initText.textContent = node.initials;
 
-        this._cleanupFn = () => {
-            svg.removeEventListener('wheel', onWheel);
-            svg.removeEventListener('mousedown', onDown);
-            window.removeEventListener('mousemove', onMove);
-            window.removeEventListener('mouseup', onUp);
-        };
-    }
-
-    // ── Node click → detail panel ─────────────────────────────────────────────
-
-    _initNodeClicks(svg, entities, container) {
-        const panel = container.querySelector('.ontology-detail');
-        svg.addEventListener('click', (e) => {
-            const node = e.target.closest('.ontology-node');
-            if (!node) {
-                // Click on empty space — deselect
-                svg.querySelectorAll('.ontology-node').forEach(n => n.classList.remove('ont-selected'));
-                if (panel) panel.classList.add('hidden');
-                return;
+            // Measure count (small, inside circle)
+            if (node.measureCount > 0) {
+                const mcText = this._mkSVG('text', {
+                    'text-anchor': 'middle', 'dominant-baseline': 'central',
+                    'font-size': '9', fill: 'rgba(255,255,255,0.7)',
+                    'pointer-events': 'none',
+                    'font-family': 'Consolas,monospace',
+                    y: R * 0.44
+                });
+                mcText.textContent = `Σ ${node.measureCount}`;
+                grp.appendChild(mcText);
             }
-            const name = node.dataset.entity;
-            const ent = entities.find(e => e.name === name);
-            if (!ent) return;
 
-            svg.querySelectorAll('.ontology-node').forEach(n => n.classList.remove('ont-selected'));
-            node.classList.add('ont-selected');
-            this._renderDetailPanel(panel, ent);
-            panel.classList.remove('hidden');
+            // Name label below
+            const label = this._mkSVG('text', {
+                'text-anchor': 'middle', 'dominant-baseline': 'hanging',
+                'font-size': '12', 'font-weight': '600',
+                fill: 'var(--text, #1e293b)',
+                'pointer-events': 'none',
+                'font-family': 'system-ui,-apple-system,sans-serif',
+                y: R + 8
+            });
+            const displayName = node.name.length > 22 ? node.name.slice(0, 20) + '…' : node.name;
+            label.textContent = displayName;
+
+            // Type badge below name
+            const BADGES = { fieldparam: 'FIELD PARAM', calcgroup: 'CALC GROUP', hidden: 'HIDDEN' };
+            if (BADGES[node.typeKey]) {
+                const badge = this._mkSVG('text', {
+                    'text-anchor': 'middle', 'dominant-baseline': 'hanging',
+                    'font-size': '9', 'font-weight': '700',
+                    fill: node.color, 'pointer-events': 'none',
+                    y: R + 23
+                });
+                badge.textContent = BADGES[node.typeKey];
+                grp.appendChild(badge);
+            }
+
+            // BPA badge (top-right)
+            if (node.critCount > 0 || node.warnCount > 0) {
+                const bc = this._mkSVG('circle', {
+                    r: '10', cx: R * 0.7, cy: -R * 0.7,
+                    fill: node.critCount > 0 ? '#ef4444' : '#f59e0b',
+                    stroke: 'white', 'stroke-width': '1.5'
+                });
+                const bt = this._mkSVG('text', {
+                    'text-anchor': 'middle', 'dominant-baseline': 'central',
+                    'font-size': '8', 'font-weight': '700', fill: 'white',
+                    'pointer-events': 'none',
+                    x: R * 0.7, y: -R * 0.7
+                });
+                bt.textContent = String(node.critCount > 0 ? node.critCount : node.warnCount);
+                grp.appendChild(bc);
+                grp.appendChild(bt);
+            }
+
+            grp.appendChild(glowRing);
+            grp.appendChild(shadow);
+            grp.appendChild(circle);
+            grp.appendChild(initText);
+            grp.appendChild(label);
+
+            // Hover effect
+            grp.addEventListener('mouseenter', () => {
+                if (!node._selected) {
+                    circle.setAttribute('stroke-width', '4');
+                    glowRing.setAttribute('opacity', '0.35');
+                }
+            });
+            grp.addEventListener('mouseleave', () => {
+                if (!node._selected) {
+                    circle.setAttribute('stroke-width', '2.5');
+                    glowRing.setAttribute('opacity', '0.15');
+                }
+            });
+
+            grp.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._selectNode(i, container);
+            });
+
+            grp.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                e.preventDefault();
+                this._dragging = { idx: i, node };
+                node._pinned = true;
+                if (this._svg) this._svg.style.cursor = 'grabbing';
+            });
+
+            nodeLayer.appendChild(grp);
+            node._grp = grp;
         });
     }
 
-    _renderDetailPanel(panel, ent) {
-        const table = this.model.tables.find(t => t.name === ent.name);
-        if (!panel || !table) return;
+    _createEdgeElements(edgeLayer) {
+        this._edges.forEach(edge => {
+            const grp = this._mkSVG('g');
+            grp.classList.add('ont-edge-grp');
 
-        const bpaIssues = (this.bpaResults?.findings || []).filter(f => f.table === ent.name);
-
-        const visibleCols = table.columns.filter(c => !c.isHidden);
-        const allCols = table.columns;
-
-        const typeIcon = ent.isFP ? '⬡ Field Parameter' : ent.isCG ? '⚙ Calculation Group' : ent.isHidden ? '🔒 Hidden Table' : '📦 Entity';
-
-        let html = `
-        <div class="ont-detail-header">
-            <div>
-                <span class="ont-detail-type">${typeIcon}</span>
-                <h3 class="ont-detail-name">${this._esc(ent.name)}</h3>
-            </div>
-            <button class="ont-detail-close" onclick="this.closest('.ontology-detail').classList.add('hidden')">×</button>
-        </div>`;
-
-        if (ent.description) {
-            html += `<p class="ont-detail-desc">${this._esc(ent.description)}</p>`;
-        }
-
-        // Stats row
-        html += `<div class="ont-stat-row">
-            <div class="ont-stat"><strong>${visibleCols.length}</strong><span>Visible columns</span></div>
-            <div class="ont-stat"><strong>${allCols.length - visibleCols.length}</strong><span>Hidden columns</span></div>
-            <div class="ont-stat"><strong>${table.measures.length}</strong><span>Measures</span></div>
-            <div class="ont-stat"><strong>${ent.visualCount}</strong><span>Visual uses</span></div>
-        </div>`;
-
-        if (ent.sourceName) {
-            html += `<div class="ont-section-label">DATA SOURCE</div>
-            <div class="ont-source-chip">💾 ${this._esc(ent.sourceName)}</div>`;
-        }
-
-        // Columns
-        if (visibleCols.length > 0) {
-            html += `<div class="ont-section-label">PROPERTIES (${visibleCols.length} visible)</div>
-            <div class="ont-col-list">`;
-            visibleCols.slice(0, 15).forEach(c => {
-                const typeTag = c.dataType ? `<span class="ont-dtype">${this._esc(c.dataType)}</span>` : '';
-                const keyMark = c.name === ent.keyCol ? ' 🔑' : '';
-                html += `<div class="ont-col-row">${typeTag}<span>${this._esc(c.name)}${keyMark}</span></div>`;
+            const path = this._mkSVG('path', {
+                fill: 'none', stroke: '#94a3b8',
+                'stroke-width': '1.5', opacity: '0.55',
+                'marker-end': 'url(#ont-arrow)'
             });
-            if (visibleCols.length > 15) {
-                html += `<div class="ont-col-row" style="color:var(--text-light);font-style:italic">+${visibleCols.length - 15} more…</div>`;
-            }
-            html += `</div>`;
-        }
+            grp.appendChild(path);
+            edge._path = path;
 
-        // Measures
-        if (table.measures.length > 0) {
-            html += `<div class="ont-section-label">KPI / MEASURES (${table.measures.length})</div>
-            <div class="ont-col-list">`;
-            table.measures.slice(0, 10).forEach(m => {
-                const fmt = m.formatString ? `<span class="ont-dtype">${this._esc(m.formatString)}</span>` : '';
-                html += `<div class="ont-col-row">${fmt}<span>∑ ${this._esc(m.name)}</span></div>`;
+            const lbl = this._mkSVG('text', {
+                'font-size': '10', fill: '#94a3b8',
+                'text-anchor': 'middle', 'dominant-baseline': 'middle',
+                'pointer-events': 'none',
+                'font-family': 'system-ui,sans-serif'
             });
-            if (table.measures.length > 10) {
-                html += `<div class="ont-col-row" style="color:var(--text-light);font-style:italic">+${table.measures.length - 10} more…</div>`;
-            }
-            html += `</div>`;
-        }
+            lbl.textContent = edge.card;
+            grp.appendChild(lbl);
+            edge._label = lbl;
 
-        // Relationships
-        const rels = this.model.relationships.filter(r => r.fromTable === ent.name || r.toTable === ent.name);
-        if (rels.length > 0) {
-            html += `<div class="ont-section-label">RELATIONSHIPS (${rels.length})</div><div class="ont-col-list">`;
-            rels.forEach(r => {
-                const other = r.fromTable === ent.name ? r.toTable : r.fromTable;
-                const dir   = r.fromTable === ent.name ? '→' : '←';
-                const card  = `${r.fromCardinality || '?'}:${r.toCardinality || '?'}`;
-                html += `<div class="ont-col-row"><span class="ont-dtype">${card}</span><span>${dir} ${this._esc(other)}</span></div>`;
-            });
-            html += `</div>`;
-        }
-
-        // BPA issues
-        if (bpaIssues.length > 0) {
-            html += `<div class="ont-section-label">BPA ISSUES (${bpaIssues.length})</div><div class="ont-col-list">`;
-            bpaIssues.slice(0, 5).forEach(f => {
-                const color = f.severity === 3 ? '#da291c' : f.severity === 2 ? '#ff8f00' : '#888';
-                html += `<div class="ont-col-row"><span class="ont-dtype" style="background:${color};color:#fff">${f.severity === 3 ? 'CRIT' : f.severity === 2 ? 'WARN' : 'INFO'}</span><span style="font-size:11px">${this._esc(f.message)}</span></div>`;
-            });
-            html += `</div>`;
-        }
-
-        panel.innerHTML = html;
+            edgeLayer.appendChild(grp);
+        });
     }
 
-    // ── Fabric IQ JSON export ─────────────────────────────────────────────────
+    _applyRootTransform() {
+        if (!this._root) return;
+        this._root.setAttribute('transform',
+            `translate(${this._W / 2 + this._tx},${this._H / 2 + this._ty}) scale(${this._scale})`
+        );
+    }
+
+    _tick() {
+        if (!this._running) return;
+
+        if (this._alpha > 0.003) {
+            this._alpha *= 0.974;
+
+            const REPK    = 7500;
+            const SPRINGK = 0.032;
+            const REST    = 185;
+            const DAMP    = 0.80;
+            const CENK    = 0.007;
+            const nodes   = this._nodes;
+            const edges   = this._edges;
+
+            nodes.forEach(n => { n._fx = 0; n._fy = 0; });
+
+            // N-body repulsion
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const a = nodes[i], b = nodes[j];
+                    const dx = b.x - a.x, dy = b.y - a.y;
+                    const d2 = dx * dx + dy * dy + 1;
+                    const d  = Math.sqrt(d2);
+                    const minD = a.radius + b.radius + 24;
+                    const f = d < minD ? (REPK * 2.5) / d2 : REPK / d2;
+                    const fx = f * dx / d, fy = f * dy / d;
+                    a._fx -= fx; a._fy -= fy;
+                    b._fx += fx; b._fy += fy;
+                }
+            }
+
+            // Spring attraction along edges
+            edges.forEach(e => {
+                const a = nodes[e.from], b = nodes[e.to];
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const d  = Math.sqrt(dx * dx + dy * dy) + 0.01;
+                const f  = SPRINGK * (d - REST);
+                const fx = f * dx / d, fy = f * dy / d;
+                a._fx += fx; a._fy += fy;
+                b._fx -= fx; b._fy -= fy;
+            });
+
+            // Weak center gravity
+            nodes.forEach(n => { n._fx -= CENK * n.x; n._fy -= CENK * n.y; });
+
+            // Euler integration
+            nodes.forEach(n => {
+                if (n._pinned) return;
+                n.vx = (n.vx + n._fx) * DAMP;
+                n.vy = (n.vy + n._fy) * DAMP;
+                n.x += n.vx;
+                n.y += n.vy;
+            });
+        }
+
+        this._updateDOM();
+        this._animFrame = requestAnimationFrame(() => this._tick());
+    }
+
+    _updateDOM() {
+        this._nodes.forEach(node => {
+            if (node._grp) {
+                node._grp.setAttribute('transform',
+                    `translate(${node.x.toFixed(1)},${node.y.toFixed(1)})`);
+            }
+        });
+
+        this._edges.forEach(edge => {
+            if (!edge._path) return;
+            const a  = this._nodes[edge.from];
+            const b  = this._nodes[edge.to];
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+            const sx = a.x + dx / d * (a.radius + 4);
+            const sy = a.y + dy / d * (a.radius + 4);
+            const ex = b.x - dx / d * (b.radius + 14);
+            const ey = b.y - dy / d * (b.radius + 14);
+            const cx = (sx + ex) / 2 - (dy / d) * 28;
+            const cy = (sy + ey) / 2 + (dx / d) * 28;
+            edge._path.setAttribute('d',
+                `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`
+            );
+            if (edge._label) {
+                edge._label.setAttribute('x', cx.toFixed(1));
+                edge._label.setAttribute('y', (cy - 9).toFixed(1));
+            }
+        });
+    }
+
+    _initInteraction(svg, container) {
+        let isPanning = false;
+        let panStart  = { x: 0, y: 0 };
+
+        svg.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const f = e.deltaY > 0 ? 0.87 : 1.15;
+            this._scale = Math.max(0.12, Math.min(4.5, this._scale * f));
+            this._applyRootTransform();
+        }, { passive: false });
+
+        svg.addEventListener('mousedown', (e) => {
+            if (e.button === 0 && !this._dragging) {
+                isPanning = true;
+                panStart  = { x: e.clientX - this._tx, y: e.clientY - this._ty };
+                svg.style.cursor = 'grabbing';
+            }
+        });
+
+        const onMove = (e) => {
+            if (this._dragging) {
+                const rect = svg.getBoundingClientRect();
+                const mx = (e.clientX - rect.left  - this._W / 2 - this._tx) / this._scale;
+                const my = (e.clientY - rect.top   - this._H / 2 - this._ty) / this._scale;
+                this._dragging.node.x  = mx;
+                this._dragging.node.y  = my;
+                this._dragging.node.vx = 0;
+                this._dragging.node.vy = 0;
+                this._alpha = Math.max(this._alpha, 0.08);
+            } else if (isPanning) {
+                this._tx = e.clientX - panStart.x;
+                this._ty = e.clientY - panStart.y;
+                this._applyRootTransform();
+            }
+        };
+
+        const onUp = () => {
+            if (this._dragging) {
+                this._dragging.node._pinned = false;
+                this._dragging.node.vx = 0;
+                this._dragging.node.vy = 0;
+                this._dragging = null;
+            }
+            isPanning = false;
+            if (svg) svg.style.cursor = 'grab';
+        };
+
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup',   onUp);
+
+        const zIn    = container.querySelector('[data-ontology-zoom="in"]');
+        const zOut   = container.querySelector('[data-ontology-zoom="out"]');
+        const zReset = container.querySelector('[data-ontology-zoom="reset"]');
+        if (zIn)    zIn.addEventListener('click',    () => { this._scale = Math.min(4.5, this._scale * 1.3); this._applyRootTransform(); });
+        if (zOut)   zOut.addEventListener('click',   () => { this._scale = Math.max(0.12, this._scale / 1.3); this._applyRootTransform(); });
+        if (zReset) zReset.addEventListener('click', () => { this._scale = 1; this._tx = 0; this._ty = 0; this._applyRootTransform(); });
+
+        svg.addEventListener('click', () => this._deselectAll(container));
+    }
+
+    _selectNode(idx, container) {
+        this._nodes.forEach((n, i) => {
+            n._selected = (i === idx);
+            if (!n._circle) return;
+            if (i === idx) {
+                n._circle.setAttribute('stroke-width', '4');
+                n._circle.setAttribute('stroke', '#fbbf24');
+                n._circle.setAttribute('filter', 'url(#ont-glow)');
+            } else {
+                n._circle.setAttribute('stroke-width', '2.5');
+                n._circle.setAttribute('stroke', n.color);
+                n._circle.removeAttribute('filter');
+            }
+        });
+        const panel = container.querySelector('#ontologyDetailPanel');
+        if (panel) {
+            panel.style.display = 'block';
+            this._renderDetail(panel, this._nodes[idx]);
+        }
+    }
+
+    _deselectAll(container) {
+        this._nodes.forEach(n => {
+            n._selected = false;
+            if (!n._circle) return;
+            n._circle.setAttribute('stroke-width', '2.5');
+            n._circle.setAttribute('stroke', n.color);
+            n._circle.removeAttribute('filter');
+        });
+        const panel = container.querySelector('#ontologyDetailPanel');
+        if (panel) panel.style.display = 'none';
+    }
+
+    _renderDetail(panel, node) {
+        const t      = node.table;
+        const cols   = node.cols;
+        const msrs   = node.measures;
+        const rels   = (this.model.relationships || []).filter(r =>
+            r.fromTable === t.name || r.toTable === t.name
+        );
+        const issues = (this.bpaResults?.findings || []).filter(f => f.table === t.name);
+        const esc    = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const sevBadge = s => s === 3
+            ? '<span class="bpa-sev-badge crit">CRIT</span>'
+            : s === 2
+            ? '<span class="bpa-sev-badge warn">WARN</span>'
+            : '<span class="bpa-sev-badge info">INFO</span>';
+        const TYPE_NAMES = {
+            entity: 'Entity', fieldparam: 'Field Parameter',
+            calcgroup: 'Calculation Group', hidden: 'Hidden Table'
+        };
+
+        panel.innerHTML = `
+            <div class="ont-detail-header" style="border-left:4px solid ${node.color}">
+                <div class="ont-detail-title-row">
+                    <div>
+                        <div class="ont-detail-type" style="color:${node.color}">${TYPE_NAMES[node.typeKey] || 'Entity'}</div>
+                        <h3 class="ont-detail-name">${esc(node.name)}</h3>
+                    </div>
+                    <button class="ont-close-btn" onclick="this.closest('.ontology-detail').style.display='none'">×</button>
+                </div>
+                ${t.description ? `<p class="ont-desc">${esc(t.description)}</p>` : ''}
+            </div>
+            <div class="ont-stats-grid">
+                <div class="ont-stat-cell"><div class="ont-stat-val">${cols.length}</div><div class="ont-stat-key">Columns</div></div>
+                <div class="ont-stat-cell"><div class="ont-stat-val">${msrs.length}</div><div class="ont-stat-key">Measures</div></div>
+                <div class="ont-stat-cell"><div class="ont-stat-val">${rels.length}</div><div class="ont-stat-key">Relations</div></div>
+                <div class="ont-stat-cell">
+                    <div class="ont-stat-val" style="color:${issues.length > 0 ? '#ef4444' : 'var(--text)'}">${issues.length}</div>
+                    <div class="ont-stat-key">BPA Issues</div>
+                </div>
+            </div>
+            ${cols.length > 0 ? `
+            <div class="ont-section">
+                <div class="ont-section-label">Properties (${Math.min(cols.length, 15)} of ${cols.length})</div>
+                <ul class="ont-prop-list">
+                    ${cols.slice(0, 15).map(c => `<li><span class="ont-prop-name">${esc(c.name)}</span><span class="ont-dtype">${c.dataType || '–'}</span></li>`).join('')}
+                    ${cols.length > 15 ? `<li class="ont-more">+${cols.length - 15} more</li>` : ''}
+                </ul>
+            </div>` : ''}
+            ${msrs.length > 0 ? `
+            <div class="ont-section">
+                <div class="ont-section-label">KPIs / Measures (${msrs.length})</div>
+                <ul class="ont-prop-list">
+                    ${msrs.slice(0, 8).map(m => `<li><span class="ont-kpi-name">Σ ${esc(m.name)}</span>${m.formatString ? `<span class="ont-dtype">${esc(m.formatString)}</span>` : ''}</li>`).join('')}
+                    ${msrs.length > 8 ? `<li class="ont-more">+${msrs.length - 8} more</li>` : ''}
+                </ul>
+            </div>` : ''}
+            ${rels.length > 0 ? `
+            <div class="ont-section">
+                <div class="ont-section-label">Relationships (${rels.length})</div>
+                <ul class="ont-prop-list">
+                    ${rels.slice(0, 10).map(r => {
+                        const other = r.fromTable === t.name ? r.toTable : r.fromTable;
+                        const dir   = r.fromTable === t.name ? '→' : '←';
+                        const c1 = r.fromCardinality === 'Many' ? '*' : '1';
+                        const c2 = r.toCardinality   === 'Many' ? '*' : '1';
+                        return `<li><span class="ont-rel-dir">${dir}</span><span class="ont-prop-name">${esc(other)}</span><span class="ont-dtype">${c1}:${c2}</span></li>`;
+                    }).join('')}
+                </ul>
+            </div>` : ''}
+            ${issues.length > 0 ? `
+            <div class="ont-section">
+                <div class="ont-section-label">BPA Issues (${issues.length})</div>
+                <div class="ont-bpa-list">
+                    ${issues.slice(0, 6).map(f => `<div class="ont-bpa-item">${sevBadge(f.severity)}<span>${esc(f.message)}</span></div>`).join('')}
+                    ${issues.length > 6 ? `<div class="ont-more">+${issues.length - 6} more</div>` : ''}
+                </div>
+            </div>` : ''}
+        `;
+    }
+
+    _addLegend(container) {
+        const div = document.createElement('div');
+        div.className = 'ont-legend';
+        div.innerHTML = `
+            <div class="ont-legend-title">Node Types</div>
+            ${[
+                { color: '#2563eb', label: 'Entity' },
+                { color: '#7c3aed', label: 'Field Parameter' },
+                { color: '#ea580c', label: 'Calc Group' },
+                { color: '#64748b', label: 'Hidden' },
+            ].map(it => `
+                <div class="ont-legend-item">
+                    <svg width="12" height="12" viewBox="0 0 12 12" style="flex-shrink:0">
+                        <circle cx="6" cy="6" r="5" fill="${it.color}"/>
+                    </svg>
+                    <span>${it.label}</span>
+                </div>`).join('')}
+            <div class="ont-legend-sep"></div>
+            <div class="ont-legend-item">
+                <span class="ont-legend-badge" style="background:#ef4444">!</span><span>Critical BPA</span>
+            </div>
+            <div class="ont-legend-item">
+                <span class="ont-legend-badge" style="background:#f59e0b">!</span><span>Warning</span>
+            </div>
+            <div class="ont-legend-sep"></div>
+            <div class="ont-legend-hint">Drag · Scroll to zoom · Click to inspect</div>
+        `;
+        container.appendChild(div);
+    }
 
     exportFabricIQ() {
-        const m = this.model;
-        const entities = m.tables.filter(t => !t._isAutoDate).map((t, i) => ({
-            id: String(1000000000000 + i),
-            namespace: 'usertypes',
-            namespaceType: 'Custom',
-            name: t.name.replace(/[^a-zA-Z0-9_-]/g, '_'),
-            displayName: t.name,
-            description: t.description || '',
-            visibility: t.isHidden ? 'Hidden' : 'Visible',
-            properties: t.columns.map((c, ci) => ({
-                id: String(2000000000000 + i * 1000 + ci),
-                name: c.name.replace(/[^a-zA-Z0-9_-]/g, '_'),
-                displayName: c.name,
-                valueType: this._mapDataType(c.dataType),
-                description: c.description || '',
-            })),
-            measures: t.measures.map(ms => ({
-                name: ms.name,
-                expression: ms.expression,
-                formatString: ms.formatString || '',
-                description: ms.description || '',
-            })),
-        }));
+        const BASE_ENT  = 1000000000000;
+        const BASE_PROP = 2000000000000;
+        const BASE_REL  = 3000000000000;
+        const model     = this.model;
+        const tables    = (model.tables || []).filter(t => !t._isAutoDate);
 
-        const idMap = new Map(entities.map(e => [e.displayName, e.id]));
+        const entityTypes = tables.map((t, i) => {
+            const props = [];
+            let pIdx = 0;
+            (t.columns || []).forEach(c => {
+                props.push({ id: BASE_PROP + i * 1000 + pIdx++, name: c.name,
+                    dataType: this._mapDataType(c.dataType), isHidden: !!c.isHidden, isMeasure: false });
+            });
+            (t.measures || []).forEach(m => {
+                props.push({ id: BASE_PROP + i * 1000 + pIdx++, name: m.name,
+                    dataType: 'Double', isHidden: !!m.isHidden, isMeasure: true,
+                    formatString: m.formatString || '', description: m.description || '' });
+            });
+            return {
+                id: BASE_ENT + i, name: t.name, description: t.description || '',
+                isHidden: !!t.isHidden,
+                entityKind: t._isFieldParameter ? 'FieldParameter' : t._isCalcGroup ? 'CalculationGroup' : 'Regular',
+                properties: props
+            };
+        });
 
-        const relationships = m.relationships.map((r, i) => ({
-            id: String(3000000000000 + i),
-            namespace: 'usertypes',
-            namespaceType: 'Custom',
-            name: `${r.fromTable}_${r.fromColumn}_${r.toTable}`.replace(/[^a-zA-Z0-9_-]/g, '_'),
-            fromCardinality: r.fromCardinality || 'one',
-            toCardinality: r.toCardinality || 'many',
-            source: { entityTypeId: idMap.get(r.fromTable) || '0' },
-            target: { entityTypeId: idMap.get(r.toTable)   || '0' },
+        const entityIdx = {};
+        tables.forEach((t, i) => { entityIdx[t.name] = BASE_ENT + i; });
+
+        const relationshipTypes = (model.relationships || []).map((r, i) => ({
+            id: BASE_REL + i,
+            name: `${r.fromTable}_${r.fromColumn}_${r.toTable}_${r.toColumn}`,
+            fromEntityId: entityIdx[r.fromTable],
+            toEntityId:   entityIdx[r.toTable],
+            fromColumn: r.fromColumn, toColumn: r.toColumn,
+            fromCardinality: r.fromCardinality || 'Many',
+            toCardinality:   r.toCardinality   || 'One',
+            isActive: r.isActive !== false,
+            crossFilteringBehavior: r.crossFilteringBehavior || 'OneDirection'
         }));
 
         return {
-            $schema: 'pbip-semlin/ontology/v1',
-            generatedAt: new Date().toISOString(),
-            model: m.database?.name || m.model?.name || 'Semantic Model',
-            entityTypes: entities,
-            relationshipTypes: relationships,
+            schemaVersion: '1.0', generatedWith: 'pbip-semlin-ontology',
+            generatedAt: new Date().toISOString(), modelName: model.name || 'SemanticModel',
+            entityTypes, relationshipTypes
         };
     }
 
     _mapDataType(dt) {
-        if (!dt) return 'String';
-        const map = {
-            'Int64': 'BigInt', 'Integer': 'BigInt',
-            'Double': 'Double', 'Decimal': 'Double', 'Currency': 'Double',
-            'Boolean': 'Boolean',
-            'DateTime': 'DateTime', 'Date': 'DateTime',
-        };
-        return map[dt] || 'String';
+        const map = { int64: 'BigInt', int32: 'BigInt', integer: 'BigInt',
+            double: 'Double', decimal: 'Double', currency: 'Double', single: 'Double',
+            string: 'String', text: 'String', boolean: 'Boolean',
+            datetime: 'DateTime', date: 'DateTime', time: 'DateTime' };
+        return map[(dt || '').toLowerCase()] || 'String';
     }
 
-    // ── SVG helpers ───────────────────────────────────────────────────────────
-
-    _el(tag, attrs) {
+    _mkSVG(tag, attrs = {}) {
         const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
-        Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+        for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
         return el;
-    }
-    _rect(x, y, w, h, rx, fill, stroke) {
-        return this._el('rect', { x, y, width: w, height: h, rx, fill, stroke: stroke || 'none', 'stroke-width': 1 });
-    }
-    _text(x, y, content, attrs) {
-        const t = this._el('text', { x, y, ...attrs });
-        t.textContent = content;
-        return t;
-    }
-    _esc(s) {
-        return String(s || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
     }
 }

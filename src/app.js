@@ -1856,6 +1856,7 @@ class App {
     renderOntologyView() {
         const container = document.getElementById('ontologyDiagramContainer');
         if (!container || !this.parsedModel) return;
+        if (this.ontologyRenderer) this.ontologyRenderer.destroy();
         this.ontologyRenderer = new OntologyRenderer(
             this.parsedModel,
             this.lineageEngine,
