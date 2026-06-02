@@ -268,24 +268,6 @@ class App {
             });
         }
 
-        // Dark mode toggle
-        const themeBtn = document.getElementById('btnThemeToggle');
-        if (themeBtn) {
-            // Restore saved theme
-            const saved = localStorage.getItem('pbip-doc-theme');
-            if (saved) {
-                document.documentElement.setAttribute('data-theme', saved);
-                document.getElementById('themeIcon').textContent = saved === 'dark' ? 'light_mode' : 'dark_mode';
-            }
-            themeBtn.addEventListener('click', () => {
-                const current = document.documentElement.getAttribute('data-theme');
-                const next = current === 'dark' ? 'light' : 'dark';
-                document.documentElement.setAttribute('data-theme', next);
-                document.getElementById('themeIcon').textContent = next === 'dark' ? 'light_mode' : 'dark_mode';
-                try { localStorage.setItem('pbip-doc-theme', next); } catch {}
-            });
-        }
-
         // Mobile sidebar toggle
         const sidebarToggle = document.getElementById('sidebarToggleBtn');
         const sidebarOverlay = document.getElementById('sidebarOverlay');
