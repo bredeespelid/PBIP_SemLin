@@ -3410,3 +3410,128 @@ tr:hover {
 [data-theme="dark"] .dax-fn {
     color: #9cdcfe;
 }
+
+/* ── Ontology view ─────────────────────────────── */
+#view-ontology {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+#ontologyDiagramContainer {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    background: var(--surface-alt, #f8f9fa);
+    border-radius: 8px;
+    border: 1px solid var(--border-light);
+}
+
+[data-theme="dark"] #ontologyDiagramContainer {
+    background: #0d1117;
+}
+
+.ontology-detail {
+    position: absolute;
+    right: 16px;
+    top: 16px;
+    width: 280px;
+    max-height: calc(100% - 32px);
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    z-index: 10;
+    padding: 0;
+}
+
+.ont-detail-header {
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border-light);
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    z-index: 1;
+}
+
+.ont-detail-header h3 {
+    margin: 0 0 2px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    word-break: break-word;
+}
+
+.ont-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    padding: 10px 14px 4px;
+    display: block;
+}
+
+.ont-stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 14px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.ont-stat-row strong {
+    color: var(--text);
+}
+
+.ont-col-list {
+    padding: 0 14px 8px;
+    list-style: none;
+    margin: 0;
+}
+
+.ont-col-list li {
+    font-size: 12px;
+    color: var(--text);
+    padding: 2px 0;
+    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.ont-dtype {
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-family: Consolas, monospace;
+    flex-shrink: 0;
+}
+
+.ont-source-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    background: #1b5e2022;
+    color: #1b5e20;
+    border: 1px solid #1b5e2044;
+    margin: 4px 14px 8px;
+}
+
+[data-theme="dark"] .ont-source-chip {
+    background: #1b5e2044;
+    color: #81c784;
+    border-color: #1b5e2066;
+}
+
+.ontology-node.ont-selected rect:first-of-type {
+    stroke: #ffd700 !important;
+    stroke-width: 3px !important;
+}
+
+.ontology-edge {
+    pointer-events: none;
+}

@@ -26,6 +26,7 @@ class App {
         this._milestoneDismissed = false;
 
         this.themeData = null;
+        this.ontologyRenderer = null;
         this.parseErrors = [];
 
         this.init();
@@ -210,6 +211,22 @@ class App {
                     const ruleId = group.dataset.ruleId;
                     this.showBPALearningModal(ruleId);
                 }
+            });
+        }
+
+        // Ontology export button
+        const ontologyExportBtn = document.getElementById('ontologyExportBtn');
+        if (ontologyExportBtn) {
+            ontologyExportBtn.addEventListener('click', () => {
+                if (!this.ontologyRenderer) return;
+                const json = this.ontologyRenderer.exportFabricIQ();
+                const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'ontology-fabric-iq.json';
+                a.click();
+                URL.revokeObjectURL(url);
             });
         }
 
@@ -624,6 +641,7 @@ class App {
         if (searchInput) searchInput.value = '';
 
         this.themeData = null;
+        this.ontologyRenderer = null;
 
         // Null out static M-parser cache so it doesn't bleed across datasets
         if (typeof MExpressionParser !== 'undefined') MExpressionParser._declaredParams = null;
@@ -1109,6 +1127,7 @@ class App {
         document.getElementById('sidebarDynamicCount').textContent = dynamicSummary.total;
 
         document.getElementById('sidebarThemeSection').classList.toggle('hidden', !this.themeData);
+        document.getElementById('sidebarOntologySection').classList.toggle('hidden', !this.parsedModel);
     }
 
     filterSidebar(query) {
@@ -1219,6 +1238,7 @@ class App {
         if (section === 'data-sources') this.renderDataSourcesView();
         if (section === 'dynamic-features') this.renderDynamicFeaturesView();
         if (section === 'theme') this.renderThemeView();
+        if (section === 'ontology') this.renderOntologyView();
 
         // Milestone tracking for sponsor prompt
         this._trackMilestone(section);
@@ -1831,6 +1851,18 @@ class App {
         }
 
         document.getElementById('themeContent').innerHTML = html;
+    }
+
+    renderOntologyView() {
+        const container = document.getElementById('ontologyDiagramContainer');
+        if (!container || !this.parsedModel) return;
+        this.ontologyRenderer = new OntologyRenderer(
+            this.parsedModel,
+            this.lineageEngine,
+            this.visualData,
+            this.bpaResults
+        );
+        this.ontologyRenderer.render(container);
     }
 
     _bindTraceButtonDelegation() {
