@@ -724,6 +724,8 @@ class OntologyRenderer {
             node.satellites.forEach(mSat => {
                 if (mSat.type !== 'measure' || !mSat.colRefs) return;
                 mSat.colRefs.forEach(ref => {
+                    // Only draw intra-table edges; cross-table refs are covered by relationship arrows
+                    if (ref.tableName !== node.name) return;
                     const colKey = `${ref.tableName}::${ref.colName}`;
                     if (!colLookup.has(colKey)) return;
                     if (!colToMsrs.has(colKey)) colToMsrs.set(colKey, []);
