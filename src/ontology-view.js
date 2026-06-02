@@ -262,16 +262,13 @@ class OntologyRenderer {
         const INNER_R = node.radius + 72;   // columns — longer spokes, more breathing room
         const OUTER_R = node.radius + 152; // measures — wide gap between rings for arc edges
 
-        const MAX_COLS = 14;
-        const MAX_MSRS = 10;
-
         // Columns — key columns first, then alphabetical
         const cols = [...node.cols].sort((a, b) => {
             if (a.isKey && !b.isKey) return -1;
             if (!a.isKey && b.isKey) return 1;
             return a.name.localeCompare(b.name);
         });
-        const showCols  = cols.slice(0, MAX_COLS);
+        const showCols  = cols;
         const totalColSlots = showCols.length;
 
         // Build column index map for barycenter computation
@@ -289,7 +286,7 @@ class OntologyRenderer {
             });
         });
         // Measures in outer ring — sorted by barycenter to minimise arc crossings
-        const showMsrs  = node.measures.slice(0, MAX_MSRS);
+        const showMsrs = node.measures.slice();
         showMsrs.sort((a, b) =>
             this._msrBarycenter(a, node.name, colIdx, showCols.length) -
             this._msrBarycenter(b, node.name, colIdx, showCols.length)
