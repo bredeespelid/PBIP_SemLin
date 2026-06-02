@@ -25,6 +25,9 @@ class OntologyRenderer {
         this._container = null;
         this._defs = null;
         this._showHidden = false;
+        this._showReports = false;
+        this._reportFilter = false;
+        this._reportUsedSet = new Set(); // "table::field" used in any visual
     }
 
     destroy() {
@@ -47,6 +50,8 @@ class OntologyRenderer {
         const { nodes, edges } = this._buildGraph();
         this._nodes = nodes;
         this._edges = edges;
+        // Stamp stable index used by visibility & attraction logic
+        this._nodes.forEach((n, i) => { n._idx = i; });
 
         const W = container.clientWidth || 900;
         const H = container.clientHeight || 580;
@@ -183,6 +188,71 @@ class OntologyRenderer {
             })
             .filter(Boolean);
 
+        // ── Report usage ──────────────────────────────────────────────────────
+        const fum = this.visualData?.fieldUsageMap;
+
+        // Mark each table node with _usedInReports
+        nodes.forEach(n => {
+            n._usedInReports = false;
+            if (fum) {
+                for (const key of fum.keys()) {
+                    if (key.split('|')[1] === n.name) { n._usedInReports = true; break; }
+                }
+            }
+        });
+
+        // Store which specific measures/columns are used (for satellite highlighting)
+        this._reportUsedSet = new Set();
+        if (fum) {
+            for (const key of fum.keys()) {
+                const [type, table, field] = key.split('|');
+                if (type === 'measure' || type === 'column') {
+                    this._reportUsedSet.add(`${table}::${field}`);
+                }
+            }
+        }
+
+        // Add a node per report page (hidden by default; toggled via legend button)
+        const MAX_RPT = 30;
+        if (this.visualData?.pages) {
+            this.visualData.pages.slice(0, MAX_RPT).forEach((page, pi) => {
+                const tablesInPage = new Set();
+                (page.visuals || []).forEach(v => {
+                    (v.fields || []).forEach(f => {
+                        const t = f.table || f.entity;
+                        if (t && idx[t] !== undefined) tablesInPage.add(t);
+                    });
+                });
+                if (tablesInPage.size === 0) return;
+
+                const pageName = page.displayName || page.name || `Page ${pi + 1}`;
+                const words    = pageName.replace(/[_-]/g, ' ').trim().split(/\s+/);
+                const initials = words.length >= 2
+                    ? (words[0][0] + words[1][0]).toUpperCase()
+                    : pageName.slice(0, 2).toUpperCase();
+
+                const rNodeIdx = nodes.length;
+                nodes.push({
+                    id: `_rpt_${page.id || pi}`, name: pageName,
+                    typeKey: 'report',
+                    color: '#0ea5e9', light: '#bae6fd', dark: '#0369a1',
+                    radius: 26, cols: [], hiddenCols: [], measures: [],
+                    initials, expanded: false, satellites: [],
+                    x: 0, y: 0, vx: 0, vy: 0,
+                    _pinned: false, _grp: null, _circle: null, _selected: false,
+                    _hideNode: false, _isReport: true, _usedInReports: true,
+                    page, _visualCount: (page.visuals || []).length,
+                    _tableCount: tablesInPage.size
+                });
+
+                tablesInPage.forEach(tName => {
+                    edges.push({ from: rNodeIdx, to: idx[tName],
+                        rel: null, card: '', _path: null, _label: null,
+                        _isReportEdge: true });
+                });
+            });
+        }
+
         return { nodes, edges };
     }
 
@@ -205,6 +275,10 @@ class OntologyRenderer {
         const extraCols = cols.length - showCols.length;
         const totalColSlots = showCols.length + (extraCols > 0 ? 1 : 0);
 
+        // Build column index map for barycenter computation
+        const colIdx = new Map();
+        showCols.forEach((c, i) => colIdx.set(c.name, i));
+
         showCols.forEach((c, i) => {
             sats.push({
                 type: 'column', name: c.name, col: c,
@@ -225,8 +299,12 @@ class OntologyRenderer {
             });
         }
 
-        // Measures in outer ring
+        // Measures in outer ring — sorted by barycenter to minimise arc crossings
         const showMsrs  = node.measures.slice(0, MAX_MSRS);
+        showMsrs.sort((a, b) =>
+            this._msrBarycenter(a, node.name, colIdx, showCols.length) -
+            this._msrBarycenter(b, node.name, colIdx, showCols.length)
+        );
         const extraMsrs = node.measures.length - showMsrs.length;
         const totalMsrSlots = showMsrs.length + (extraMsrs > 0 ? 1 : 0);
 
@@ -275,6 +353,15 @@ class OntologyRenderer {
             if (!seen.has(key)) { seen.add(key); refs.push({ tableName: defaultTable, colName }); }
         }
         return refs;
+    }
+
+    // Barycenter of a measure's same-table column refs (for crossing minimization)
+    _msrBarycenter(measure, tableName, colIdx, numCols) {
+        if (!measure.expression) return numCols;
+        const refs = this._parseDaxColumnRefs(measure.expression, tableName)
+            .filter(r => r.tableName === tableName && colIdx.has(r.colName));
+        if (refs.length === 0) return numCols;
+        return refs.reduce((s, r) => s + colIdx.get(r.colName), 0) / refs.length;
     }
 
     _colTypeColor(dt) {
@@ -466,23 +553,36 @@ class OntologyRenderer {
             });
             node._circle = circle;
 
-            // Small expand indicator dot at bottom of circle
-            const expandDot = this._mkSVG('circle', {
-                r: '5', cy: R - 2,
-                fill: 'white', stroke: node.color, 'stroke-width': '1.2', opacity: '0.8'
-            });
-            node._expandDot = expandDot;
+            // Expand dot (tables only — report pages don't expand)
+            if (!node._isReport) {
+                const expandDot = this._mkSVG('circle', {
+                    r: '5', cy: R - 2,
+                    fill: 'white', stroke: node.color, 'stroke-width': '1.2', opacity: '0.8'
+                });
+                node._expandDot = expandDot;
+                grp.appendChild(expandDot); // added later in correct z-order below
+            }
 
             const initText = this._mkSVG('text', {
                 'text-anchor': 'middle', 'dominant-baseline': 'central',
                 'font-size': Math.round(R * 0.5),
                 fill: 'rgba(255,255,255,0.95)', 'pointer-events': 'none',
                 'font-weight': '700', 'font-family': 'system-ui,-apple-system,sans-serif',
-                y: node.measures.length > 0 ? -5 : 0
+                y: node._isReport ? -5 : (node.measures.length > 0 ? -5 : 0)
             });
             initText.textContent = node.initials;
 
-            if (node.measures.length > 0) {
+            if (node._isReport) {
+                // Show visual count inside report node
+                const vcText = this._mkSVG('text', {
+                    'text-anchor': 'middle', 'dominant-baseline': 'central',
+                    'font-size': '8', fill: 'rgba(255,255,255,0.65)',
+                    'pointer-events': 'none', 'font-family': 'Consolas,monospace',
+                    y: R * 0.46
+                });
+                vcText.textContent = `${node._visualCount || 0}v`;
+                grp.appendChild(vcText);
+            } else if (node.measures.length > 0) {
                 const mcText = this._mkSVG('text', {
                     'text-anchor': 'middle', 'dominant-baseline': 'central',
                     'font-size': '9', fill: 'rgba(255,255,255,0.7)',
@@ -502,7 +602,7 @@ class OntologyRenderer {
             });
             label.textContent = node.name.length > 22 ? node.name.slice(0, 20) + '…' : node.name;
 
-            const BADGES = { fieldparam: 'FIELD PARAM', calcgroup: 'CALC GROUP', hidden: 'HIDDEN' };
+            const BADGES = { fieldparam: 'FIELD PARAM', calcgroup: 'CALC GROUP', hidden: 'HIDDEN', report: 'PAGE' };
             if (BADGES[node.typeKey]) {
                 const badge = this._mkSVG('text', {
                     'text-anchor': 'middle', 'dominant-baseline': 'hanging',
@@ -516,7 +616,7 @@ class OntologyRenderer {
             grp.appendChild(glowRing);
             grp.appendChild(shadow);
             grp.appendChild(circle);
-            grp.appendChild(expandDot);
+            if (node._expandDot) grp.appendChild(node._expandDot);
             grp.appendChild(initText);
             grp.appendChild(label);
 
@@ -535,7 +635,7 @@ class OntologyRenderer {
 
             grp.addEventListener('click', e => {
                 e.stopPropagation();
-                this._toggleExpand(i, container);
+                if (!node._isReport) this._toggleExpand(i, container);
                 this._selectNode(i, container);
             });
 
@@ -556,22 +656,33 @@ class OntologyRenderer {
     _createEdgeElements(edgeLayer) {
         this._edges.forEach(edge => {
             const grp = this._mkSVG('g');
-            const path = this._mkSVG('path', {
-                fill: 'none', stroke: '#94a3b8',
-                'stroke-width': '1.5', opacity: '0.55',
-                'marker-end': 'url(#ont-arrow)'
-            });
+            let path;
+            if (edge._isReportEdge) {
+                path = this._mkSVG('path', {
+                    fill: 'none', stroke: '#0ea5e9',
+                    'stroke-width': '1', opacity: '0.28',
+                    'stroke-dasharray': '5,4'
+                });
+            } else {
+                path = this._mkSVG('path', {
+                    fill: 'none', stroke: '#94a3b8',
+                    'stroke-width': '1.5', opacity: '0.55',
+                    'marker-end': 'url(#ont-arrow)'
+                });
+            }
             grp.appendChild(path);
             edge._path = path;
 
-            const lbl = this._mkSVG('text', {
-                'font-size': '10', fill: '#94a3b8',
-                'text-anchor': 'middle', 'dominant-baseline': 'middle',
-                'pointer-events': 'none', 'font-family': 'system-ui,sans-serif'
-            });
-            lbl.textContent = edge.card;
-            grp.appendChild(lbl);
-            edge._label = lbl;
+            if (!edge._isReportEdge) {
+                const lbl = this._mkSVG('text', {
+                    'font-size': '10', fill: '#94a3b8',
+                    'text-anchor': 'middle', 'dominant-baseline': 'middle',
+                    'pointer-events': 'none', 'font-family': 'system-ui,sans-serif'
+                });
+                lbl.textContent = edge.card;
+                grp.appendChild(lbl);
+                edge._label = lbl;
+            }
             edgeLayer.appendChild(grp);
         });
     }
@@ -602,11 +713,10 @@ class OntologyRenderer {
             nodes.forEach(n => { n._fx = 0; n._fy = 0; });
 
             for (let i = 0; i < nodes.length; i++) {
-                if (!this._showHidden && nodes[i]._hideNode) continue;
+                if (!this._nodeActive(nodes[i])) continue;
                 for (let j = i + 1; j < nodes.length; j++) {
-                    if (!this._showHidden && nodes[j]._hideNode) continue;
+                    if (!this._nodeActive(nodes[j])) continue;
                     const a = nodes[i], b = nodes[j];
-                    // Expanded nodes need more personal space
                     const ra = a.expanded ? a.radius + 188 : a.radius;
                     const rb = b.expanded ? b.radius + 188 : b.radius;
                     const dx = b.x - a.x, dy = b.y - a.y;
@@ -620,8 +730,9 @@ class OntologyRenderer {
             }
 
             edges.forEach(e => {
+                if (e._isReportEdge) return; // handled separately below
                 const a = nodes[e.from], b = nodes[e.to];
-                if (!this._showHidden && (a._hideNode || b._hideNode)) return;
+                if (!this._nodeActive(a) || !this._nodeActive(b)) return;
                 const dx = b.x - a.x, dy = b.y - a.y;
                 const d  = Math.sqrt(dx * dx + dy * dy) + 0.01;
                 const f  = SPRINGK * (d - REST);
@@ -630,14 +741,33 @@ class OntologyRenderer {
                 b._fx -= fx; b._fy -= fy;
             });
 
+            // Report nodes: pull toward centroid of connected tables (one-way, won't distort tables)
+            if (this._showReports) {
+                nodes.forEach(rn => {
+                    if (!rn._isReport) return;
+                    let cx = 0, cy = 0, cnt = 0;
+                    edges.forEach(e => {
+                        if (!e._isReportEdge) return;
+                        const other = e.from === rn._idx ? nodes[e.to]
+                                    : e.to   === rn._idx ? nodes[e.from] : null;
+                        if (other && this._nodeActive(other)) { cx += other.x; cy += other.y; cnt++; }
+                    });
+                    if (cnt > 0) {
+                        const RATT = 0.01;
+                        rn._fx += RATT * (cx / cnt - rn.x);
+                        rn._fy += RATT * (cy / cnt - rn.y);
+                    }
+                });
+            }
+
             nodes.forEach(n => {
-                if (!this._showHidden && n._hideNode) return;
+                if (!this._nodeActive(n)) return;
                 n._fx -= CENK * n.x; n._fy -= CENK * n.y;
             });
 
             nodes.forEach(n => {
                 if (n._pinned) return;
-                if (!this._showHidden && n._hideNode) return;
+                if (!this._nodeActive(n)) return;
                 n.vx = (n.vx + n._fx) * DAMP;
                 n.vy = (n.vy + n._fy) * DAMP;
                 n.x += n.vx;
@@ -651,7 +781,7 @@ class OntologyRenderer {
 
     _updateDOM() {
         this._nodes.forEach(node => {
-            if (!this._showHidden && node._hideNode) return;
+            if (!this._nodeActive(node)) return;
             if (node._grp) {
                 node._grp.setAttribute('transform',
                     `translate(${node.x.toFixed(1)},${node.y.toFixed(1)})`);
@@ -686,6 +816,18 @@ class OntologyRenderer {
             const b  = this._nodes[edge.to];
             const dx = b.x - a.x, dy = b.y - a.y;
             const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+            if (edge._isReportEdge) {
+                // Report edge: gentle arc, no arrowhead
+                const sx = a.x + dx / d * (a.radius + 3);
+                const sy = a.y + dy / d * (a.radius + 3);
+                const ex = b.x - dx / d * (b.radius + 5);
+                const ey = b.y - dy / d * (b.radius + 5);
+                const cx = (sx + ex) / 2 - (dy / d) * 12;
+                const cy = (sy + ey) / 2 + (dx / d) * 12;
+                edge._path.setAttribute('d',
+                    `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
+                return;
+            }
             const sx = a.x + dx / d * (a.radius + 4);
             const sy = a.y + dy / d * (a.radius + 4);
             const ex = b.x - dx / d * (b.radius + 14);
@@ -829,45 +971,84 @@ class OntologyRenderer {
         });
     }
 
-    // ─── Hidden table visibility ─────────────────────────────────────────────
+    // ─── Visibility helpers ──────────────────────────────────────────────────
+
+    // Should the node participate in physics?
+    _nodeActive(n) {
+        if (!this._showHidden  && n._hideNode)  return false;
+        if (!this._showReports && n._isReport)  return false;
+        return true;
+    }
+
+    // Should the node be rendered (DOM display:block)?
+    _nodeVisible(n) {
+        if (!this._nodeActive(n)) return false;
+        if (this._reportFilter && !n._usedInReports && !n._isReport) return false;
+        return true;
+    }
+
+    // Apply all visibility rules to every node and edge DOM element
+    _applyNodeVisibility() {
+        this._nodes.forEach(n => {
+            const vis = this._nodeVisible(n);
+            if (n._grp) n._grp.style.display = vis ? '' : 'none';
+            if (!vis && n.expanded) {
+                n.expanded = false;
+                n.satellites.forEach(sat => {
+                    if (sat._grp)   sat._grp.style.display   = 'none';
+                    if (sat._spoke) sat._spoke.style.display = 'none';
+                });
+                if (n._expandDot) n._expandDot.setAttribute('fill', 'white');
+            }
+        });
+        this._edges.forEach(e => {
+            const a = this._nodes[e.from], b = this._nodes[e.to];
+            const vis = this._nodeVisible(a) && this._nodeVisible(b);
+            if (e._path)  e._path.style.display  = vis ? '' : 'none';
+            if (e._label) e._label.style.display  = (vis && e.card) ? '' : 'none';
+        });
+    }
 
     _setHiddenVisibility(show) {
         this._showHidden = show;
-
         if (show) {
-            // Scatter hidden nodes near centre before revealing them
             this._nodes.forEach(n => {
                 if (!n._hideNode) return;
                 n.x = (Math.random() - 0.5) * 150;
                 n.y = (Math.random() - 0.5) * 150;
                 n.vx = 0; n.vy = 0;
-                if (n._grp) n._grp.style.display = '';
             });
             this._alpha = Math.max(this._alpha, 0.6);
-        } else {
-            this._nodes.forEach(n => {
-                if (!n._hideNode) return;
-                if (n._grp) n._grp.style.display = 'none';
-                // Collapse any expanded satellites
-                if (n.expanded) {
-                    n.expanded = false;
-                    n.satellites.forEach(sat => {
-                        if (sat._grp)   sat._grp.style.display   = 'none';
-                        if (sat._spoke) sat._spoke.style.display = 'none';
-                    });
-                    if (n._expandDot) n._expandDot.setAttribute('fill', 'white');
-                }
-            });
         }
+        this._applyNodeVisibility();
+    }
 
-        // Show/hide relationship edges that touch a hidden node
-        this._edges.forEach(edge => {
-            const a = this._nodes[edge.from];
-            const b = this._nodes[edge.to];
-            const hiddenEdge = !show && (a._hideNode || b._hideNode);
-            if (edge._path)  edge._path.style.display  = hiddenEdge ? 'none' : '';
-            if (edge._label) edge._label.style.display = hiddenEdge ? 'none' : '';
-        });
+    _setReportVisibility(show) {
+        this._showReports = show;
+        if (show) {
+            this._nodes.forEach(n => {
+                if (!n._isReport) return;
+                // Position near centroid of connected table nodes
+                let cx = 0, cy = 0, cnt = 0;
+                this._edges.forEach(e => {
+                    if (!e._isReportEdge) return;
+                    const other = e.from === n._idx ? this._nodes[e.to]
+                                : e.to   === n._idx ? this._nodes[e.from] : null;
+                    if (other && !other._isReport) { cx += other.x; cy += other.y; cnt++; }
+                });
+                n.x = cnt > 0 ? cx / cnt + (Math.random() - 0.5) * 200 : (Math.random() - 0.5) * 400;
+                n.y = cnt > 0 ? cy / cnt + (Math.random() - 0.5) * 200 : (Math.random() - 0.5) * 400;
+                n.vx = 0; n.vy = 0;
+            });
+            this._alpha = Math.max(this._alpha, 0.7);
+        }
+        this._applyNodeVisibility();
+    }
+
+    _setReportFilter(enabled) {
+        this._reportFilter = enabled;
+        if (enabled) this._alpha = Math.max(this._alpha, 0.4);
+        this._applyNodeVisibility();
     }
 
     // ─── Interaction ─────────────────────────────────────────────────────────
@@ -953,7 +1134,9 @@ class OntologyRenderer {
         const panel = container.querySelector('#ontologyDetailPanel');
         if (panel) {
             panel.style.display = 'block';
-            this._renderTableDetail(panel, this._nodes[nodeIdx]);
+            const n = this._nodes[nodeIdx];
+            if (n._isReport) this._renderReportDetail(panel, n);
+            else             this._renderTableDetail(panel, n);
         }
     }
 
@@ -1050,6 +1233,37 @@ class OntologyRenderer {
         `;
     }
 
+    _renderReportDetail(panel, node) {
+        const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const tablesUsed = [];
+        this._edges.forEach(e => {
+            if (!e._isReportEdge) return;
+            if (e.from === node._idx) tablesUsed.push(this._nodes[e.to].name);
+        });
+        panel.innerHTML = `
+            <div class="ont-detail-header" style="border-left:4px solid #0ea5e9">
+                <div class="ont-detail-title-row">
+                    <div>
+                        <div class="ont-detail-type" style="color:#0ea5e9">Report Page</div>
+                        <h3 class="ont-detail-name">${esc(node.name)}</h3>
+                    </div>
+                    <button class="ont-close-btn" onclick="this.closest('.ontology-detail').style.display='none'">×</button>
+                </div>
+            </div>
+            <div class="ont-stats-grid">
+                <div class="ont-stat-cell"><div class="ont-stat-val">${node._visualCount || 0}</div><div class="ont-stat-key">Visuals</div></div>
+                <div class="ont-stat-cell"><div class="ont-stat-val">${tablesUsed.length}</div><div class="ont-stat-key">Tables</div></div>
+            </div>
+            ${tablesUsed.length > 0 ? `
+            <div class="ont-section">
+                <div class="ont-section-label">Tables Referenced</div>
+                <ul class="ont-prop-list">
+                    ${tablesUsed.map(t => `<li><span class="ont-prop-name">${esc(t)}</span></li>`).join('')}
+                </ul>
+            </div>` : ''}
+        `;
+    }
+
     _renderColumnDetail(panel, parentNode, sat) {
         const c   = sat.col;
         const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1091,6 +1305,7 @@ class OntologyRenderer {
                 { color: '#7c3aed', label: 'Field Parameter', r: 6 },
                 { color: '#ea580c', label: 'Calc Group',      r: 6 },
                 { color: '#64748b', label: 'Hidden',          r: 6 },
+                { color: '#0ea5e9', label: 'Report Page',     r: 5 },
             ].map(it => `
                 <div class="ont-legend-item">
                     <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0"><circle cx="7" cy="7" r="${it.r}" fill="${it.color}"/></svg>
@@ -1134,6 +1349,39 @@ class OntologyRenderer {
                 btn.classList.toggle('ont-hidden-toggle--active', nowShow);
             });
             div.appendChild(btn);
+        }
+
+        const reportCount = this._nodes.filter(n => n._isReport).length;
+        if (reportCount > 0) {
+            // Toggle: show/hide report page nodes
+            const rBtn = document.createElement('button');
+            rBtn.className = 'ont-hidden-toggle';
+            rBtn.textContent = `Show report pages (${reportCount})`;
+            rBtn.addEventListener('click', () => {
+                const nowShow = !this._showReports;
+                this._setReportVisibility(nowShow);
+                rBtn.textContent = nowShow
+                    ? `Hide report pages (${reportCount})`
+                    : `Show report pages (${reportCount})`;
+                rBtn.classList.toggle('ont-hidden-toggle--active', nowShow);
+            });
+            div.appendChild(rBtn);
+
+            // Filter: show only tables used in at least one report
+            const usedN  = this._nodes.filter(n => !n._isReport && n._usedInReports).length;
+            const totalN = this._nodes.filter(n => !n._isReport && !n._hideNode).length;
+            const fBtn = document.createElement('button');
+            fBtn.className = 'ont-hidden-toggle';
+            fBtn.textContent = `Filter: report-used only (${usedN}/${totalN})`;
+            fBtn.addEventListener('click', () => {
+                const nowFilter = !this._reportFilter;
+                this._setReportFilter(nowFilter);
+                fBtn.classList.toggle('ont-hidden-toggle--active', nowFilter);
+                fBtn.textContent = nowFilter
+                    ? `Show all tables`
+                    : `Filter: report-used only (${usedN}/${totalN})`;
+            });
+            div.appendChild(fBtn);
         }
 
         container.appendChild(div);
