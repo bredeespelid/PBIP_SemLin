@@ -1,0 +1,53 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Generate PBIP Docs",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/generate-docs.js",
+        "${input:pbipFolder}",
+        "--scope", "all",
+        "--format", "${input:docFormat}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Generate PBIP Docs (current folder)",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/generate-docs.js",
+        "${workspaceFolder}",
+        "--scope", "all"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "pbipFolder",
+      "type": "promptString",
+      "description": "Path to your PBIP project folder",
+      "default": "C:\\path\\to\\YourReport"
+    },
+    {
+      "id": "docFormat",
+      "type": "pickString",
+      "description": "Output format",
+      "options": ["md", "json", "html"],
+      "default": "md"
+    }
+  ]
+}

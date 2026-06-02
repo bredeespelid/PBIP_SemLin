@@ -1,0 +1,8 @@
+{
+  "name": "pbip-documenter",
+  "version": "1.0.0",
+  "description": "Generate documentation for Power BI PBIP semantic models",
+  "bin": {
+    "pbip-documenter": "./generate-docs.js"
+  }
+}

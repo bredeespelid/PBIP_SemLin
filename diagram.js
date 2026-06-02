@@ -820,8 +820,10 @@ class DiagramRenderer {
         // Preserve the static .diagram-controls toolbar; only remove dynamic content.
         const existingSvg = this.container.querySelector('svg');
         if (existingSvg) existingSvg.remove();
-        const existingP = this.container.querySelector('p');
-        if (existingP) existingP.remove();
+        const existingPlaceholder = this.container.querySelector('p');
+        if (existingPlaceholder) existingPlaceholder.remove();
+        const existingLoading = this.container.querySelector('.loading');
+        if (existingLoading) existingLoading.remove();
 
         const entries = Object.entries(fieldUsageMap);
         if (entries.length === 0) {
