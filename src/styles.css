@@ -3639,3 +3639,23 @@ tr:hover {
     font-style: italic;
     margin-top: 2px;
 }
+
+/* DAX block inside detail panel */
+.ont-dax-block {
+    margin: 0;
+    padding: 10px 14px 12px;
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--surface-alt, #f4f6fb);
+    border: none;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    max-height: 180px;
+    overflow-y: auto;
+}
+[data-theme="dark"] .ont-dax-block {
+    background: #0c1017;
+}

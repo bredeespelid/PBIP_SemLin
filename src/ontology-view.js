@@ -11,6 +11,8 @@ class OntologyRenderer {
         this._dragging = null;
         this._svg = null;
         this._root = null;
+        this._spokesLayer = null;
+        this._satLayer = null;
         this._alpha = 1.0;
         this._running = false;
         this._animFrame = null;
@@ -45,9 +47,8 @@ class OntologyRenderer {
         this._W = W;
         this._H = H;
 
-        // Initial circular layout
         const n = nodes.length;
-        const initR = Math.min(W, H) * 0.28;
+        const initR = Math.min(W, H) * 0.3;
         nodes.forEach((node, i) => {
             const angle = (2 * Math.PI * i / Math.max(n, 1)) - Math.PI / 2;
             node.x = Math.cos(angle) * initR + (Math.random() - 0.5) * 20;
@@ -66,11 +67,20 @@ class OntologyRenderer {
         svg.appendChild(root);
         this._root = root;
 
+        // Layer order matters: edges → spokes → table nodes → satellites
         const edgeLayer = this._mkSVG('g', { id: 'ont-edges' });
         root.appendChild(edgeLayer);
 
+        const spokesLayer = this._mkSVG('g', { id: 'ont-spokes' });
+        root.appendChild(spokesLayer);
+        this._spokesLayer = spokesLayer;
+
         const nodeLayer = this._mkSVG('g', { id: 'ont-nodes' });
         root.appendChild(nodeLayer);
+
+        const satLayer = this._mkSVG('g', { id: 'ont-satellites' });
+        root.appendChild(satLayer);
+        this._satLayer = satLayer;
 
         this._createEdgeElements(edgeLayer);
         this._createNodeElements(nodeLayer, container);
@@ -82,7 +92,6 @@ class OntologyRenderer {
         this._scale = 1;
         this._applyRootTransform();
 
-        // Fade in
         root.style.opacity = '0';
         root.style.transition = 'opacity 0.5s ease';
         requestAnimationFrame(() => { root.style.opacity = '1'; });
@@ -102,9 +111,12 @@ class OntologyRenderer {
         container.appendChild(panel);
     }
 
+    // ─── Graph data ──────────────────────────────────────────────────────────
+
     _buildGraph() {
-        const model = this.model;
+        const model  = this.model;
         const tables = (model.tables || []).filter(t => !t._isAutoDate);
+
         const STYLES = {
             entity:     { color: '#2563eb', light: '#93c5fd', dark: '#1e40af' },
             fieldparam: { color: '#7c3aed', light: '#c4b5fd', dark: '#5b21b6' },
@@ -112,30 +124,31 @@ class OntologyRenderer {
             hidden:     { color: '#64748b', light: '#cbd5e1', dark: '#334155' },
         };
 
-        const nodes = tables.map((t) => {
+        const nodes = tables.map(t => {
             let typeKey = 'entity';
             if (t._isFieldParameter) typeKey = 'fieldparam';
             else if (t._isCalcGroup) typeKey = 'calcgroup';
-            else if (t.isHidden) typeKey = 'hidden';
+            else if (t.isHidden)     typeKey = 'hidden';
 
-            const s = STYLES[typeKey];
-            const cols = (t.columns || []).filter(c => !c.isHidden);
-            const measures = t.measures || [];
+            const s          = STYLES[typeKey];
+            const cols       = (t.columns || []).filter(c => !c.isHidden);
+            const hiddenCols = (t.columns || []).filter(c =>  c.isHidden);
+            const measures   = t.measures || [];
             const complexity = Math.min(cols.length + measures.length * 1.8, 90);
-            const radius = Math.round(Math.max(32, Math.min(52, 30 + complexity * 0.22)));
+            const radius     = Math.round(Math.max(32, Math.min(50, 30 + complexity * 0.22)));
 
-            const words = t.name.replace(/[_-]/g, ' ').trim().split(/\s+/);
+            const words    = t.name.replace(/[_-]/g, ' ').trim().split(/\s+/);
             const initials = words.length >= 2
                 ? (words[0][0] + words[1][0]).toUpperCase()
                 : t.name.slice(0, 2).toUpperCase();
 
             return {
                 id: t.name, name: t.name, table: t,
-                typeKey, ...s,
-                radius, cols, measures,
-                colCount: cols.length,
-                measureCount: measures.length,
+                typeKey, ...s, radius,
+                cols, hiddenCols, measures,
                 initials,
+                expanded: false,
+                satellites: [],      // built lazily on first expand
                 x: 0, y: 0, vx: 0, vy: 0,
                 _pinned: false, _grp: null, _circle: null, _selected: false
             };
@@ -158,11 +171,208 @@ class OntologyRenderer {
         return { nodes, edges };
     }
 
+    // Build satellite descriptors for a table node (called once, lazily)
+    _buildSatellites(node) {
+        const sats    = [];
+        const INNER_R = node.radius + 55;   // columns
+        const OUTER_R = node.radius + 108;  // measures
+
+        const MAX_COLS = 14;
+        const MAX_MSRS = 10;
+
+        // Columns — key columns first, then alphabetical
+        const cols = [...node.cols].sort((a, b) => {
+            if (a.isKey && !b.isKey) return -1;
+            if (!a.isKey && b.isKey) return 1;
+            return a.name.localeCompare(b.name);
+        });
+        const showCols  = cols.slice(0, MAX_COLS);
+        const extraCols = cols.length - showCols.length;
+        const totalColSlots = showCols.length + (extraCols > 0 ? 1 : 0);
+
+        showCols.forEach((c, i) => {
+            sats.push({
+                type: 'column', name: c.name, col: c,
+                color: this._colTypeColor(c.dataType),
+                radius: 11,
+                orbitR: INNER_R,
+                angle:  (2 * Math.PI * i / Math.max(totalColSlots, 1)) - Math.PI / 2,
+                x: node.x, y: node.y, _grp: null, _spoke: null
+            });
+        });
+        if (extraCols > 0) {
+            sats.push({
+                type: 'more-cols', name: `+${extraCols}`,
+                color: '#94a3b8', radius: 11,
+                orbitR: INNER_R,
+                angle:  (2 * Math.PI * MAX_COLS / Math.max(totalColSlots, 1)) - Math.PI / 2,
+                x: node.x, y: node.y, _grp: null, _spoke: null
+            });
+        }
+
+        // Measures in outer ring
+        const showMsrs  = node.measures.slice(0, MAX_MSRS);
+        const extraMsrs = node.measures.length - showMsrs.length;
+        const totalMsrSlots = showMsrs.length + (extraMsrs > 0 ? 1 : 0);
+
+        showMsrs.forEach((m, i) => {
+            sats.push({
+                type: 'measure', name: m.name, measure: m,
+                color: '#7c3aed',
+                radius: 19,
+                orbitR: OUTER_R,
+                angle:  (2 * Math.PI * i / Math.max(totalMsrSlots, 1)) - Math.PI / 2,
+                x: node.x, y: node.y, _grp: null, _spoke: null
+            });
+        });
+        if (extraMsrs > 0) {
+            sats.push({
+                type: 'more-msrs', name: `+${extraMsrs}`,
+                color: '#7c3aed', radius: 13,
+                orbitR: OUTER_R,
+                angle:  (2 * Math.PI * MAX_MSRS / Math.max(totalMsrSlots, 1)) - Math.PI / 2,
+                x: node.x, y: node.y, _grp: null, _spoke: null
+            });
+        }
+
+        return sats;
+    }
+
+    _colTypeColor(dt) {
+        const t = (dt || '').toLowerCase();
+        if (['int64','int32','integer','double','decimal','currency','single'].includes(t)) return '#059669';
+        if (['string','text'].includes(t)) return '#0284c7';
+        if (['datetime','date','time'].includes(t)) return '#d97706';
+        if (['boolean'].includes(t)) return '#db2777';
+        return '#64748b';
+    }
+
+    // ─── Expand / collapse ───────────────────────────────────────────────────
+
+    _toggleExpand(nodeIdx, container) {
+        const node = this._nodes[nodeIdx];
+        node.expanded = !node.expanded;
+
+        if (node.expanded) {
+            if (node.satellites.length === 0) {
+                node.satellites = this._buildSatellites(node);
+            }
+            node.satellites.forEach(sat => {
+                if (!sat._grp) {
+                    this._createSatelliteElement(sat, node, container);
+                } else {
+                    sat._grp.style.display  = '';
+                    if (sat._spoke) sat._spoke.style.display = '';
+                }
+            });
+            this._alpha = Math.max(this._alpha, 0.35); // re-energize so neighbours make room
+        } else {
+            node.satellites.forEach(sat => {
+                if (sat._grp)  sat._grp.style.display  = 'none';
+                if (sat._spoke) sat._spoke.style.display = 'none';
+            });
+        }
+
+        // Update expand-dot indicator
+        if (node._expandDot) {
+            node._expandDot.setAttribute('fill', node.expanded ? node.color : 'white');
+        }
+    }
+
+    _createSatelliteElement(sat, parentNode, container) {
+        const R = sat.radius;
+
+        // Spoke (dashed line from parent to satellite)
+        const spoke = this._mkSVG('line', {
+            stroke: parentNode.color, 'stroke-width': '1',
+            'stroke-dasharray': '3,3', opacity: '0.35'
+        });
+        this._spokesLayer.appendChild(spoke);
+        sat._spoke = spoke;
+
+        const grp = this._mkSVG('g');
+        grp.classList.add('ont-sat-grp');
+        grp.style.cursor = sat.type.startsWith('more') ? 'default' : 'pointer';
+
+        if (sat.type === 'column') {
+            const circle = this._mkSVG('circle', {
+                r: R, fill: sat.color, opacity: '0.88',
+                stroke: 'white', 'stroke-width': '1.5'
+            });
+            // Hover tooltip
+            const title = this._mkSVG('title');
+            title.textContent = `${sat.name}  (${sat.col.dataType || '?'})`;
+            grp.appendChild(circle);
+            grp.appendChild(title);
+
+        } else if (sat.type === 'measure') {
+            const gid  = `sat-g-${Math.random().toString(36).slice(2)}`;
+            const grad = this._mkSVG('radialGradient', { id: gid, cx: '38%', cy: '32%', r: '68%' });
+            const s1   = this._mkSVG('stop', { offset: '0%' });
+            s1.setAttribute('stop-color', '#c4b5fd');
+            const s2 = this._mkSVG('stop', { offset: '100%' });
+            s2.setAttribute('stop-color', '#5b21b6');
+            grad.appendChild(s1); grad.appendChild(s2);
+            this._defs.appendChild(grad);
+
+            const circle = this._mkSVG('circle', {
+                r: R, fill: `url(#${gid})`,
+                stroke: '#7c3aed', 'stroke-width': '1.5'
+            });
+            const sym = this._mkSVG('text', {
+                'text-anchor': 'middle', 'dominant-baseline': 'central',
+                'font-size': '11', fill: 'white',
+                'pointer-events': 'none', 'font-weight': '700'
+            });
+            sym.textContent = 'Σ';
+            grp.appendChild(circle);
+            grp.appendChild(sym);
+
+            // Name label below measure node
+            const lbl = this._mkSVG('text', {
+                'text-anchor': 'middle', 'dominant-baseline': 'hanging',
+                'font-size': '9', 'font-weight': '500',
+                fill: 'var(--text, #1e293b)',
+                'pointer-events': 'none', y: R + 4
+            });
+            lbl.textContent = sat.name.length > 14 ? sat.name.slice(0, 12) + '…' : sat.name;
+            grp.appendChild(lbl);
+
+        } else {
+            // "+N more" placeholder
+            const circle = this._mkSVG('circle', {
+                r: R, fill: 'var(--surface,#fff)',
+                stroke: sat.color, 'stroke-width': '1.5',
+                'stroke-dasharray': '3,2', opacity: '0.8'
+            });
+            const txt = this._mkSVG('text', {
+                'text-anchor': 'middle', 'dominant-baseline': 'central',
+                'font-size': '8', fill: '#64748b',
+                'pointer-events': 'none', 'font-weight': '700'
+            });
+            txt.textContent = sat.name;
+            grp.appendChild(circle);
+            grp.appendChild(txt);
+        }
+
+        // Click → detail panel
+        if (!sat.type.startsWith('more')) {
+            grp.addEventListener('click', e => {
+                e.stopPropagation();
+                this._selectSatellite(parentNode, sat, container);
+            });
+        }
+
+        this._satLayer.appendChild(grp);
+        sat._grp = grp;
+    }
+
+    // ─── Defs & node creation ────────────────────────────────────────────────
+
     _addDefs(svg) {
         const defs = this._mkSVG('defs');
         this._defs = defs;
 
-        // Arrowhead marker
         const mk = this._mkSVG('marker', {
             id: 'ont-arrow', markerWidth: '10', markerHeight: '7',
             refX: '9', refY: '3.5', orient: 'auto'
@@ -170,17 +380,14 @@ class OntologyRenderer {
         mk.appendChild(this._mkSVG('polygon', { points: '0 0,10 3.5,0 7', fill: '#94a3b8' }));
         defs.appendChild(mk);
 
-        // Glow filter (selected)
         const fGlow = this._mkSVG('filter', { id: 'ont-glow', x: '-40%', y: '-40%', width: '180%', height: '180%' });
-        const feGB = this._mkSVG('feGaussianBlur', { stdDeviation: '7', result: 'coloredBlur' });
+        const feGB  = this._mkSVG('feGaussianBlur', { stdDeviation: '7', result: 'coloredBlur' });
         const feMerge = this._mkSVG('feMerge');
         feMerge.appendChild(this._mkSVG('feMergeNode', { in: 'coloredBlur' }));
         feMerge.appendChild(this._mkSVG('feMergeNode', { in: 'SourceGraphic' }));
-        fGlow.appendChild(feGB);
-        fGlow.appendChild(feMerge);
+        fGlow.appendChild(feGB); fGlow.appendChild(feMerge);
         defs.appendChild(fGlow);
 
-        // Drop shadow
         const fShadow = this._mkSVG('filter', { id: 'ont-shadow', x: '-30%', y: '-30%', width: '160%', height: '160%' });
         fShadow.appendChild(this._mkSVG('feDropShadow', { dx: '2', dy: '3', stdDeviation: '4', 'flood-opacity': '0.22' }));
         defs.appendChild(fShadow);
@@ -192,15 +399,13 @@ class OntologyRenderer {
         this._nodes.forEach((node, i) => {
             const R = node.radius;
 
-            // Per-node radial gradient
-            const gid = `ont-grad-${i}`;
+            const gid  = `ont-grad-${i}`;
             const grad = this._mkSVG('radialGradient', { id: gid, cx: '38%', cy: '32%', r: '68%' });
-            const s1 = this._mkSVG('stop', { offset: '0%' });
+            const s1   = this._mkSVG('stop', { offset: '0%' });
             s1.setAttribute('stop-color', node.light);
             const s2 = this._mkSVG('stop', { offset: '100%' });
             s2.setAttribute('stop-color', node.dark);
-            grad.appendChild(s1);
-            grad.appendChild(s2);
+            grad.appendChild(s1); grad.appendChild(s2);
             this._defs.appendChild(grad);
 
             const grp = this._mkSVG('g');
@@ -208,70 +413,62 @@ class OntologyRenderer {
             grp.dataset.nodeIdx = String(i);
             grp.style.cursor = 'pointer';
 
-            // Outer glow ring
             const glowRing = this._mkSVG('circle', {
-                r: R + 9, fill: 'none',
-                stroke: node.color, 'stroke-width': '1.5',
-                opacity: '0.15'
+                r: R + 9, fill: 'none', stroke: node.color,
+                'stroke-width': '1.5', opacity: '0.15'
             });
-
-            // Shadow
             const shadow = this._mkSVG('circle', { r: R + 2, cx: 2, cy: 4 });
             shadow.setAttribute('fill', 'rgba(0,0,0,0.18)');
             shadow.setAttribute('filter', 'url(#ont-shadow)');
 
-            // Main circle
             const circle = this._mkSVG('circle', {
                 r: R, fill: `url(#${gid})`,
                 stroke: node.color, 'stroke-width': '2.5'
             });
             node._circle = circle;
 
-            // Initials text
+            // Small expand indicator dot at bottom of circle
+            const expandDot = this._mkSVG('circle', {
+                r: '5', cy: R - 2,
+                fill: 'white', stroke: node.color, 'stroke-width': '1.2', opacity: '0.8'
+            });
+            node._expandDot = expandDot;
+
             const initText = this._mkSVG('text', {
                 'text-anchor': 'middle', 'dominant-baseline': 'central',
                 'font-size': Math.round(R * 0.5),
-                fill: 'rgba(255,255,255,0.95)',
-                'pointer-events': 'none',
-                'font-weight': '700',
-                'font-family': 'system-ui,-apple-system,sans-serif',
-                y: node.measureCount > 0 ? -5 : 0
+                fill: 'rgba(255,255,255,0.95)', 'pointer-events': 'none',
+                'font-weight': '700', 'font-family': 'system-ui,-apple-system,sans-serif',
+                y: node.measures.length > 0 ? -5 : 0
             });
             initText.textContent = node.initials;
 
-            // Measure count (small, inside circle)
-            if (node.measureCount > 0) {
+            if (node.measures.length > 0) {
                 const mcText = this._mkSVG('text', {
                     'text-anchor': 'middle', 'dominant-baseline': 'central',
                     'font-size': '9', fill: 'rgba(255,255,255,0.7)',
-                    'pointer-events': 'none',
-                    'font-family': 'Consolas,monospace',
+                    'pointer-events': 'none', 'font-family': 'Consolas,monospace',
                     y: R * 0.44
                 });
-                mcText.textContent = `Σ ${node.measureCount}`;
+                mcText.textContent = `Σ ${node.measures.length}`;
                 grp.appendChild(mcText);
             }
 
-            // Name label below
             const label = this._mkSVG('text', {
                 'text-anchor': 'middle', 'dominant-baseline': 'hanging',
                 'font-size': '12', 'font-weight': '600',
-                fill: 'var(--text, #1e293b)',
-                'pointer-events': 'none',
+                fill: 'var(--text, #1e293b)', 'pointer-events': 'none',
                 'font-family': 'system-ui,-apple-system,sans-serif',
                 y: R + 8
             });
-            const displayName = node.name.length > 22 ? node.name.slice(0, 20) + '…' : node.name;
-            label.textContent = displayName;
+            label.textContent = node.name.length > 22 ? node.name.slice(0, 20) + '…' : node.name;
 
-            // Type badge below name
             const BADGES = { fieldparam: 'FIELD PARAM', calcgroup: 'CALC GROUP', hidden: 'HIDDEN' };
             if (BADGES[node.typeKey]) {
                 const badge = this._mkSVG('text', {
                     'text-anchor': 'middle', 'dominant-baseline': 'hanging',
                     'font-size': '9', 'font-weight': '700',
-                    fill: node.color, 'pointer-events': 'none',
-                    y: R + 23
+                    fill: node.color, 'pointer-events': 'none', y: R + 23
                 });
                 badge.textContent = BADGES[node.typeKey];
                 grp.appendChild(badge);
@@ -280,10 +477,10 @@ class OntologyRenderer {
             grp.appendChild(glowRing);
             grp.appendChild(shadow);
             grp.appendChild(circle);
+            grp.appendChild(expandDot);
             grp.appendChild(initText);
             grp.appendChild(label);
 
-            // Hover effect
             grp.addEventListener('mouseenter', () => {
                 if (!node._selected) {
                     circle.setAttribute('stroke-width', '4');
@@ -297,12 +494,13 @@ class OntologyRenderer {
                 }
             });
 
-            grp.addEventListener('click', (e) => {
+            grp.addEventListener('click', e => {
                 e.stopPropagation();
+                this._toggleExpand(i, container);
                 this._selectNode(i, container);
             });
 
-            grp.addEventListener('mousedown', (e) => {
+            grp.addEventListener('mousedown', e => {
                 if (e.button !== 0) return;
                 e.stopPropagation();
                 e.preventDefault();
@@ -319,8 +517,6 @@ class OntologyRenderer {
     _createEdgeElements(edgeLayer) {
         this._edges.forEach(edge => {
             const grp = this._mkSVG('g');
-            grp.classList.add('ont-edge-grp');
-
             const path = this._mkSVG('path', {
                 fill: 'none', stroke: '#94a3b8',
                 'stroke-width': '1.5', opacity: '0.55',
@@ -332,16 +528,16 @@ class OntologyRenderer {
             const lbl = this._mkSVG('text', {
                 'font-size': '10', fill: '#94a3b8',
                 'text-anchor': 'middle', 'dominant-baseline': 'middle',
-                'pointer-events': 'none',
-                'font-family': 'system-ui,sans-serif'
+                'pointer-events': 'none', 'font-family': 'system-ui,sans-serif'
             });
             lbl.textContent = edge.card;
             grp.appendChild(lbl);
             edge._label = lbl;
-
             edgeLayer.appendChild(grp);
         });
     }
+
+    // ─── Physics simulation ──────────────────────────────────────────────────
 
     _applyRootTransform() {
         if (!this._root) return;
@@ -358,7 +554,7 @@ class OntologyRenderer {
 
             const REPK    = 7500;
             const SPRINGK = 0.032;
-            const REST    = 185;
+            const REST    = 190;
             const DAMP    = 0.80;
             const CENK    = 0.007;
             const nodes   = this._nodes;
@@ -366,22 +562,22 @@ class OntologyRenderer {
 
             nodes.forEach(n => { n._fx = 0; n._fy = 0; });
 
-            // N-body repulsion
             for (let i = 0; i < nodes.length; i++) {
                 for (let j = i + 1; j < nodes.length; j++) {
                     const a = nodes[i], b = nodes[j];
+                    // Expanded nodes need more personal space
+                    const ra = a.expanded ? a.radius + 115 : a.radius;
+                    const rb = b.expanded ? b.radius + 115 : b.radius;
                     const dx = b.x - a.x, dy = b.y - a.y;
                     const d2 = dx * dx + dy * dy + 1;
                     const d  = Math.sqrt(d2);
-                    const minD = a.radius + b.radius + 24;
-                    const f = d < minD ? (REPK * 2.5) / d2 : REPK / d2;
+                    const f  = d < ra + rb + 24 ? (REPK * 2.5) / d2 : REPK / d2;
                     const fx = f * dx / d, fy = f * dy / d;
                     a._fx -= fx; a._fy -= fy;
                     b._fx += fx; b._fy += fy;
                 }
             }
 
-            // Spring attraction along edges
             edges.forEach(e => {
                 const a = nodes[e.from], b = nodes[e.to];
                 const dx = b.x - a.x, dy = b.y - a.y;
@@ -392,10 +588,8 @@ class OntologyRenderer {
                 b._fx -= fx; b._fy -= fy;
             });
 
-            // Weak center gravity
             nodes.forEach(n => { n._fx -= CENK * n.x; n._fy -= CENK * n.y; });
 
-            // Euler integration
             nodes.forEach(n => {
                 if (n._pinned) return;
                 n.vx = (n.vx + n._fx) * DAMP;
@@ -414,6 +608,26 @@ class OntologyRenderer {
             if (node._grp) {
                 node._grp.setAttribute('transform',
                     `translate(${node.x.toFixed(1)},${node.y.toFixed(1)})`);
+            }
+
+            // Satellites orbit their parent
+            if (node.expanded) {
+                node.satellites.forEach(sat => {
+                    if (!sat._grp) return;
+                    const sx = node.x + Math.cos(sat.angle) * sat.orbitR;
+                    const sy = node.y + Math.sin(sat.angle) * sat.orbitR;
+                    sat.x = sx; sat.y = sy;
+                    sat._grp.setAttribute('transform', `translate(${sx.toFixed(1)},${sy.toFixed(1)})`);
+
+                    if (sat._spoke) {
+                        const dx = sx - node.x, dy = sy - node.y;
+                        const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                        sat._spoke.setAttribute('x1', (node.x + dx / d * (node.radius + 3)).toFixed(1));
+                        sat._spoke.setAttribute('y1', (node.y + dy / d * (node.radius + 3)).toFixed(1));
+                        sat._spoke.setAttribute('x2', (sx   - dx / d * sat.radius).toFixed(1));
+                        sat._spoke.setAttribute('y2', (sy   - dy / d * sat.radius).toFixed(1));
+                    }
+                });
             }
         });
 
@@ -439,18 +653,20 @@ class OntologyRenderer {
         });
     }
 
+    // ─── Interaction ─────────────────────────────────────────────────────────
+
     _initInteraction(svg, container) {
         let isPanning = false;
         let panStart  = { x: 0, y: 0 };
 
-        svg.addEventListener('wheel', (e) => {
+        svg.addEventListener('wheel', e => {
             e.preventDefault();
             const f = e.deltaY > 0 ? 0.87 : 1.15;
-            this._scale = Math.max(0.12, Math.min(4.5, this._scale * f));
+            this._scale = Math.max(0.1, Math.min(4.5, this._scale * f));
             this._applyRootTransform();
         }, { passive: false });
 
-        svg.addEventListener('mousedown', (e) => {
+        svg.addEventListener('mousedown', e => {
             if (e.button === 0 && !this._dragging) {
                 isPanning = true;
                 panStart  = { x: e.clientX - this._tx, y: e.clientY - this._ty };
@@ -458,7 +674,7 @@ class OntologyRenderer {
             }
         });
 
-        const onMove = (e) => {
+        const onMove = e => {
             if (this._dragging) {
                 const rect = svg.getBoundingClientRect();
                 const mx = (e.clientX - rect.left  - this._W / 2 - this._tx) / this._scale;
@@ -493,17 +709,19 @@ class OntologyRenderer {
         const zOut   = container.querySelector('[data-ontology-zoom="out"]');
         const zReset = container.querySelector('[data-ontology-zoom="reset"]');
         if (zIn)    zIn.addEventListener('click',    () => { this._scale = Math.min(4.5, this._scale * 1.3); this._applyRootTransform(); });
-        if (zOut)   zOut.addEventListener('click',   () => { this._scale = Math.max(0.12, this._scale / 1.3); this._applyRootTransform(); });
+        if (zOut)   zOut.addEventListener('click',   () => { this._scale = Math.max(0.1,  this._scale / 1.3); this._applyRootTransform(); });
         if (zReset) zReset.addEventListener('click', () => { this._scale = 1; this._tx = 0; this._ty = 0; this._applyRootTransform(); });
 
         svg.addEventListener('click', () => this._deselectAll(container));
     }
 
-    _selectNode(idx, container) {
+    // ─── Selection & detail panel ────────────────────────────────────────────
+
+    _selectNode(nodeIdx, container) {
         this._nodes.forEach((n, i) => {
-            n._selected = (i === idx);
+            n._selected = (i === nodeIdx);
             if (!n._circle) return;
-            if (i === idx) {
+            if (i === nodeIdx) {
                 n._circle.setAttribute('stroke-width', '4');
                 n._circle.setAttribute('stroke', '#fbbf24');
                 n._circle.setAttribute('filter', 'url(#ont-glow)');
@@ -516,8 +734,16 @@ class OntologyRenderer {
         const panel = container.querySelector('#ontologyDetailPanel');
         if (panel) {
             panel.style.display = 'block';
-            this._renderDetail(panel, this._nodes[idx]);
+            this._renderTableDetail(panel, this._nodes[nodeIdx]);
         }
+    }
+
+    _selectSatellite(parentNode, sat, container) {
+        const panel = container.querySelector('#ontologyDetailPanel');
+        if (!panel) return;
+        panel.style.display = 'block';
+        if (sat.type === 'measure') this._renderMeasureDetail(panel, parentNode, sat);
+        else                        this._renderColumnDetail(panel, parentNode, sat);
     }
 
     _deselectAll(container) {
@@ -532,18 +758,13 @@ class OntologyRenderer {
         if (panel) panel.style.display = 'none';
     }
 
-    _renderDetail(panel, node) {
-        const t      = node.table;
-        const cols   = node.cols;
-        const msrs   = node.measures;
-        const rels   = (this.model.relationships || []).filter(r =>
+    _renderTableDetail(panel, node) {
+        const t    = node.table;
+        const rels = (this.model.relationships || []).filter(r =>
             r.fromTable === t.name || r.toTable === t.name
         );
         const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const TYPE_NAMES = {
-            entity: 'Entity', fieldparam: 'Field Parameter',
-            calcgroup: 'Calculation Group', hidden: 'Hidden Table'
-        };
+        const TYPE_NAMES = { entity: 'Entity', fieldparam: 'Field Parameter', calcgroup: 'Calculation Group', hidden: 'Hidden Table' };
 
         panel.innerHTML = `
             <div class="ont-detail-header" style="border-left:4px solid ${node.color}">
@@ -557,65 +778,132 @@ class OntologyRenderer {
                 ${t.description ? `<p class="ont-desc">${esc(t.description)}</p>` : ''}
             </div>
             <div class="ont-stats-grid">
-                <div class="ont-stat-cell"><div class="ont-stat-val">${cols.length}</div><div class="ont-stat-key">Columns</div></div>
-                <div class="ont-stat-cell"><div class="ont-stat-val">${msrs.length}</div><div class="ont-stat-key">Measures</div></div>
+                <div class="ont-stat-cell"><div class="ont-stat-val">${node.cols.length}</div><div class="ont-stat-key">Columns</div></div>
+                <div class="ont-stat-cell"><div class="ont-stat-val">${node.measures.length}</div><div class="ont-stat-key">Measures</div></div>
                 <div class="ont-stat-cell"><div class="ont-stat-val">${rels.length}</div><div class="ont-stat-key">Relations</div></div>
-                <div class="ont-stat-cell"><div class="ont-stat-val">${(t.columns || []).filter(c => c.isHidden).length}</div><div class="ont-stat-key">Hidden</div></div>
+                <div class="ont-stat-cell"><div class="ont-stat-val">${node.hiddenCols?.length || 0}</div><div class="ont-stat-key">Hidden</div></div>
             </div>
-            ${cols.length > 0 ? `
-            <div class="ont-section">
-                <div class="ont-section-label">Properties (${Math.min(cols.length, 15)} of ${cols.length})</div>
-                <ul class="ont-prop-list">
-                    ${cols.slice(0, 15).map(c => `<li><span class="ont-prop-name">${esc(c.name)}</span><span class="ont-dtype">${c.dataType || '–'}</span></li>`).join('')}
-                    ${cols.length > 15 ? `<li class="ont-more">+${cols.length - 15} more</li>` : ''}
-                </ul>
-            </div>` : ''}
-            ${msrs.length > 0 ? `
-            <div class="ont-section">
-                <div class="ont-section-label">KPIs / Measures (${msrs.length})</div>
-                <ul class="ont-prop-list">
-                    ${msrs.slice(0, 8).map(m => `<li><span class="ont-kpi-name">Σ ${esc(m.name)}</span>${m.formatString ? `<span class="ont-dtype">${esc(m.formatString)}</span>` : ''}</li>`).join('')}
-                    ${msrs.length > 8 ? `<li class="ont-more">+${msrs.length - 8} more</li>` : ''}
-                </ul>
-            </div>` : ''}
             ${rels.length > 0 ? `
             <div class="ont-section">
-                <div class="ont-section-label">Relationships (${rels.length})</div>
+                <div class="ont-section-label">Relationships</div>
                 <ul class="ont-prop-list">
                     ${rels.slice(0, 10).map(r => {
                         const other = r.fromTable === t.name ? r.toTable : r.fromTable;
                         const dir   = r.fromTable === t.name ? '→' : '←';
-                        const c1 = r.fromCardinality === 'Many' ? '*' : '1';
-                        const c2 = r.toCardinality   === 'Many' ? '*' : '1';
+                        const c1    = r.fromCardinality === 'Many' ? '*' : '1';
+                        const c2    = r.toCardinality   === 'Many' ? '*' : '1';
                         return `<li><span class="ont-rel-dir">${dir}</span><span class="ont-prop-name">${esc(other)}</span><span class="ont-dtype">${c1}:${c2}</span></li>`;
                     }).join('')}
                 </ul>
             </div>` : ''}
+            <div class="ont-section" style="padding:10px 14px">
+                <div style="font-size:11px;color:var(--text-secondary)">
+                    ${node.expanded ? '↙ Click node again to collapse' : '↗ Click node to expand columns &amp; measures'}
+                </div>
+            </div>
         `;
     }
+
+    _renderMeasureDetail(panel, parentNode, sat) {
+        const m   = sat.measure;
+        const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        panel.innerHTML = `
+            <div class="ont-detail-header" style="border-left:4px solid #7c3aed">
+                <div class="ont-detail-title-row">
+                    <div>
+                        <div class="ont-detail-type" style="color:#7c3aed">KPI / Measure</div>
+                        <h3 class="ont-detail-name">Σ ${esc(m.name)}</h3>
+                    </div>
+                    <button class="ont-close-btn" onclick="this.closest('.ontology-detail').style.display='none'">×</button>
+                </div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">in <strong>${esc(parentNode.name)}</strong></div>
+            </div>
+            <div style="padding:10px 14px 6px">
+                ${m.formatString  ? `<div class="ont-stat-row"><span>Format</span><strong>${esc(m.formatString)}</strong></div>` : ''}
+                ${m.displayFolder ? `<div class="ont-stat-row"><span>Folder</span><strong>${esc(m.displayFolder)}</strong></div>` : ''}
+                ${m.description   ? `<p class="ont-desc" style="padding:4px 0">${esc(m.description)}</p>` : ''}
+            </div>
+            ${m.expression ? `
+            <div class="ont-section">
+                <div class="ont-section-label">DAX Expression</div>
+                <pre class="ont-dax-block">${esc(m.expression)}</pre>
+            </div>` : ''}
+        `;
+    }
+
+    _renderColumnDetail(panel, parentNode, sat) {
+        const c   = sat.col;
+        const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        panel.innerHTML = `
+            <div class="ont-detail-header" style="border-left:4px solid ${sat.color}">
+                <div class="ont-detail-title-row">
+                    <div>
+                        <div class="ont-detail-type" style="color:${sat.color}">Property / Column</div>
+                        <h3 class="ont-detail-name">${esc(c.name)}</h3>
+                    </div>
+                    <button class="ont-close-btn" onclick="this.closest('.ontology-detail').style.display='none'">×</button>
+                </div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">in <strong>${esc(parentNode.name)}</strong></div>
+            </div>
+            <div style="padding:10px 14px 6px">
+                <div class="ont-stat-row"><span>Data Type</span><strong>${esc(c.dataType || '–')}</strong></div>
+                ${c.formatString  ? `<div class="ont-stat-row"><span>Format</span><strong>${esc(c.formatString)}</strong></div>` : ''}
+                ${c.displayFolder ? `<div class="ont-stat-row"><span>Folder</span><strong>${esc(c.displayFolder)}</strong></div>` : ''}
+                <div class="ont-stat-row"><span>Key column</span><strong>${c.isKey ? 'Yes' : 'No'}</strong></div>
+                ${c.description   ? `<p class="ont-desc" style="padding:4px 0">${esc(c.description)}</p>` : ''}
+            </div>
+            ${c.expression ? `
+            <div class="ont-section">
+                <div class="ont-section-label">Calculated Column Expression</div>
+                <pre class="ont-dax-block">${esc(c.expression)}</pre>
+            </div>` : ''}
+        `;
+    }
+
+    // ─── Legend ──────────────────────────────────────────────────────────────
 
     _addLegend(container) {
         const div = document.createElement('div');
         div.className = 'ont-legend';
         div.innerHTML = `
-            <div class="ont-legend-title">Node Types</div>
+            <div class="ont-legend-title">Entity Types</div>
             ${[
-                { color: '#2563eb', label: 'Entity' },
-                { color: '#7c3aed', label: 'Field Parameter' },
-                { color: '#ea580c', label: 'Calc Group' },
-                { color: '#64748b', label: 'Hidden' },
+                { color: '#2563eb', label: 'Entity',          r: 6 },
+                { color: '#7c3aed', label: 'Field Parameter', r: 6 },
+                { color: '#ea580c', label: 'Calc Group',      r: 6 },
+                { color: '#64748b', label: 'Hidden',          r: 6 },
             ].map(it => `
                 <div class="ont-legend-item">
-                    <svg width="12" height="12" viewBox="0 0 12 12" style="flex-shrink:0">
-                        <circle cx="6" cy="6" r="5" fill="${it.color}"/>
-                    </svg>
+                    <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0"><circle cx="7" cy="7" r="${it.r}" fill="${it.color}"/></svg>
                     <span>${it.label}</span>
                 </div>`).join('')}
             <div class="ont-legend-sep"></div>
-            <div class="ont-legend-hint">Drag · Scroll to zoom · Click to inspect</div>
+            <div class="ont-legend-title">Properties</div>
+            ${[
+                { color: '#059669', label: 'Numeric' },
+                { color: '#0284c7', label: 'Text' },
+                { color: '#d97706', label: 'DateTime' },
+                { color: '#db2777', label: 'Boolean' },
+            ].map(it => `
+                <div class="ont-legend-item">
+                    <svg width="10" height="10" viewBox="0 0 10 10" style="flex-shrink:0"><circle cx="5" cy="5" r="4" fill="${it.color}" opacity=".88"/></svg>
+                    <span>${it.label}</span>
+                </div>`).join('')}
+            <div class="ont-legend-sep"></div>
+            <div class="ont-legend-item">
+                <svg width="16" height="16" viewBox="0 0 16 16" style="flex-shrink:0">
+                    <circle cx="8" cy="8" r="7" fill="#5b21b6"/>
+                    <text x="8" y="8" text-anchor="middle" dominant-baseline="central" fill="white" font-size="9" font-weight="700">Σ</text>
+                </svg>
+                <span>Measure / KPI</span>
+            </div>
+            <div class="ont-legend-sep"></div>
+            <div class="ont-legend-hint">Click to expand · Drag · Scroll to zoom</div>
         `;
         container.appendChild(div);
     }
+
+    // ─── Fabric IQ export ────────────────────────────────────────────────────
 
     exportFabricIQ() {
         const BASE_ENT  = 1000000000000;
@@ -650,11 +938,9 @@ class OntologyRenderer {
         const relationshipTypes = (model.relationships || []).map((r, i) => ({
             id: BASE_REL + i,
             name: `${r.fromTable}_${r.fromColumn}_${r.toTable}_${r.toColumn}`,
-            fromEntityId: entityIdx[r.fromTable],
-            toEntityId:   entityIdx[r.toTable],
+            fromEntityId: entityIdx[r.fromTable], toEntityId: entityIdx[r.toTable],
             fromColumn: r.fromColumn, toColumn: r.toColumn,
-            fromCardinality: r.fromCardinality || 'Many',
-            toCardinality:   r.toCardinality   || 'One',
+            fromCardinality: r.fromCardinality || 'Many', toCardinality: r.toCardinality || 'One',
             isActive: r.isActive !== false,
             crossFilteringBehavior: r.crossFilteringBehavior || 'OneDirection'
         }));
