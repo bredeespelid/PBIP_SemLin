@@ -3758,7 +3758,7 @@ svg{max-width:100%;height:auto}
         
         if (targetFile) {
             try {
-                const response = await fetch(`bpa/dax/${targetFile}`);
+                const response = await fetch(`docs/bpa/dax/${targetFile}`);
                 if (!response.ok) {
                     throw new Error('File not found');
                 }
