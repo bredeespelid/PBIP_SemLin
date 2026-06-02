@@ -105,8 +105,6 @@ class OntologyRenderer {
     _buildGraph() {
         const model = this.model;
         const tables = (model.tables || []).filter(t => !t._isAutoDate);
-        const bpaFindings = this.bpaResults?.findings || [];
-
         const STYLES = {
             entity:     { color: '#2563eb', light: '#93c5fd', dark: '#1e40af' },
             fieldparam: { color: '#7c3aed', light: '#c4b5fd', dark: '#5b21b6' },
@@ -123,8 +121,6 @@ class OntologyRenderer {
             const s = STYLES[typeKey];
             const cols = (t.columns || []).filter(c => !c.isHidden);
             const measures = t.measures || [];
-            const critCount = bpaFindings.filter(f => f.table === t.name && f.severity === 3).length;
-            const warnCount = bpaFindings.filter(f => f.table === t.name && f.severity <= 2).length;
             const complexity = Math.min(cols.length + measures.length * 1.8, 90);
             const radius = Math.round(Math.max(32, Math.min(52, 30 + complexity * 0.22)));
 
@@ -139,7 +135,6 @@ class OntologyRenderer {
                 radius, cols, measures,
                 colCount: cols.length,
                 measureCount: measures.length,
-                critCount, warnCount,
                 initials,
                 x: 0, y: 0, vx: 0, vy: 0,
                 _pinned: false, _grp: null, _circle: null, _selected: false
@@ -280,24 +275,6 @@ class OntologyRenderer {
                 });
                 badge.textContent = BADGES[node.typeKey];
                 grp.appendChild(badge);
-            }
-
-            // BPA badge (top-right)
-            if (node.critCount > 0 || node.warnCount > 0) {
-                const bc = this._mkSVG('circle', {
-                    r: '10', cx: R * 0.7, cy: -R * 0.7,
-                    fill: node.critCount > 0 ? '#ef4444' : '#f59e0b',
-                    stroke: 'white', 'stroke-width': '1.5'
-                });
-                const bt = this._mkSVG('text', {
-                    'text-anchor': 'middle', 'dominant-baseline': 'central',
-                    'font-size': '8', 'font-weight': '700', fill: 'white',
-                    'pointer-events': 'none',
-                    x: R * 0.7, y: -R * 0.7
-                });
-                bt.textContent = String(node.critCount > 0 ? node.critCount : node.warnCount);
-                grp.appendChild(bc);
-                grp.appendChild(bt);
             }
 
             grp.appendChild(glowRing);
@@ -562,13 +539,7 @@ class OntologyRenderer {
         const rels   = (this.model.relationships || []).filter(r =>
             r.fromTable === t.name || r.toTable === t.name
         );
-        const issues = (this.bpaResults?.findings || []).filter(f => f.table === t.name);
-        const esc    = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const sevBadge = s => s === 3
-            ? '<span class="bpa-sev-badge crit">CRIT</span>'
-            : s === 2
-            ? '<span class="bpa-sev-badge warn">WARN</span>'
-            : '<span class="bpa-sev-badge info">INFO</span>';
+        const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const TYPE_NAMES = {
             entity: 'Entity', fieldparam: 'Field Parameter',
             calcgroup: 'Calculation Group', hidden: 'Hidden Table'
@@ -589,10 +560,7 @@ class OntologyRenderer {
                 <div class="ont-stat-cell"><div class="ont-stat-val">${cols.length}</div><div class="ont-stat-key">Columns</div></div>
                 <div class="ont-stat-cell"><div class="ont-stat-val">${msrs.length}</div><div class="ont-stat-key">Measures</div></div>
                 <div class="ont-stat-cell"><div class="ont-stat-val">${rels.length}</div><div class="ont-stat-key">Relations</div></div>
-                <div class="ont-stat-cell">
-                    <div class="ont-stat-val" style="color:${issues.length > 0 ? '#ef4444' : 'var(--text)'}">${issues.length}</div>
-                    <div class="ont-stat-key">BPA Issues</div>
-                </div>
+                <div class="ont-stat-cell"><div class="ont-stat-val">${(t.columns || []).filter(c => c.isHidden).length}</div><div class="ont-stat-key">Hidden</div></div>
             </div>
             ${cols.length > 0 ? `
             <div class="ont-section">
@@ -623,14 +591,6 @@ class OntologyRenderer {
                     }).join('')}
                 </ul>
             </div>` : ''}
-            ${issues.length > 0 ? `
-            <div class="ont-section">
-                <div class="ont-section-label">BPA Issues (${issues.length})</div>
-                <div class="ont-bpa-list">
-                    ${issues.slice(0, 6).map(f => `<div class="ont-bpa-item">${sevBadge(f.severity)}<span>${esc(f.message)}</span></div>`).join('')}
-                    ${issues.length > 6 ? `<div class="ont-more">+${issues.length - 6} more</div>` : ''}
-                </div>
-            </div>` : ''}
         `;
     }
 
@@ -651,13 +611,6 @@ class OntologyRenderer {
                     </svg>
                     <span>${it.label}</span>
                 </div>`).join('')}
-            <div class="ont-legend-sep"></div>
-            <div class="ont-legend-item">
-                <span class="ont-legend-badge" style="background:#ef4444">!</span><span>Critical BPA</span>
-            </div>
-            <div class="ont-legend-item">
-                <span class="ont-legend-badge" style="background:#f59e0b">!</span><span>Warning</span>
-            </div>
             <div class="ont-legend-sep"></div>
             <div class="ont-legend-hint">Drag · Scroll to zoom · Click to inspect</div>
         `;
