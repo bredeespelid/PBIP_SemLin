@@ -3881,16 +3881,22 @@ svg{max-width:100%;height:auto}
 
         const targetFile = ruleMarkdownMap[ruleId];
 
-        if (targetFile && window.location.protocol !== 'file:') {
-            try {
-                const response = await fetch(`docs/bpa/dax/${targetFile}`);
-                if (!response.ok) throw new Error('File not found');
-                const mdText = await response.text();
-                modalContent.innerHTML = this._parseMarkdownToHtml(mdText);
-            } catch (err) {
-                console.warn('Could not fetch BPA detail markdown:', err);
-                this._renderDefaultBPAExplanation(rule, modalContent);
+        if (targetFile) {
+            const urls = [
+                `docs/bpa/dax/${targetFile}`,
+                `https://raw.githubusercontent.com/bredeespelid/PBIP_SemLin/main/docs/bpa/dax/${targetFile}`
+            ];
+            let loaded = false;
+            for (const url of urls) {
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) continue;
+                    modalContent.innerHTML = this._parseMarkdownToHtml(await response.text());
+                    loaded = true;
+                    break;
+                } catch { continue; }
             }
+            if (!loaded) this._renderDefaultBPAExplanation(rule, modalContent);
         } else {
             this._renderDefaultBPAExplanation(rule, modalContent);
         }
@@ -4004,21 +4010,25 @@ CustomerName, [Total Sales], ProductID</code></pre>`;
         modal.style.display = 'flex';
         backdrop.style.display = 'block';
 
-        if (window.location.protocol === 'file:') {
-            document.getElementById('bpaModalContent').innerHTML =
-                `<p style="color:var(--text-secondary)">Funksjonsdokumentasjon krever at appen kjøres fra en lokal server eller GitHub Pages.<br><code style="font-size:12px">python -m http.server</code></p>`;
-            return;
+        const urls = [
+            `docs/bpa/dax/${fnName}-function-dax.md`,
+            `https://raw.githubusercontent.com/bredeespelid/PBIP_SemLin/main/docs/bpa/dax/${fnName}-function-dax.md`
+        ];
+
+        for (const url of urls) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) continue;
+                const md = await response.text();
+                document.getElementById('bpaModalContent').innerHTML = this._parseMarkdownToHtml(md);
+                return;
+            } catch {
+                continue;
+            }
         }
 
-        try {
-            const response = await fetch(`docs/bpa/dax/${fnName}-function-dax.md`);
-            if (!response.ok) throw new Error('not found');
-            const md = await response.text();
-            document.getElementById('bpaModalContent').innerHTML = this._parseMarkdownToHtml(md);
-        } catch {
-            document.getElementById('bpaModalContent').innerHTML =
-                `<p style="color:var(--text-secondary)">Ingen dokumentasjon tilgjengelig for <strong>${this._esc(fnName.toUpperCase())}</strong>.</p>`;
-        }
+        document.getElementById('bpaModalContent').innerHTML =
+            `<p style="color:var(--text-secondary)">Ingen dokumentasjon tilgjengelig for <strong>${this._esc(fnName.toUpperCase())}</strong>.</p>`;
     }
 
     _parseMarkdownToHtml(md) {
