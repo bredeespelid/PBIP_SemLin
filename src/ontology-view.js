@@ -12,6 +12,7 @@ class OntologyRenderer {
         this._svg = null;
         this._root = null;
         this._spokesLayer = null;
+        this._colEdgesLayer = null;
         this._satLayer = null;
         this._alpha = 1.0;
         this._running = false;
@@ -78,6 +79,12 @@ class OntologyRenderer {
         const spokesLayer = this._mkSVG('g', { id: 'ont-spokes' });
         root.appendChild(spokesLayer);
         this._spokesLayer = spokesLayer;
+
+        // Measure→column reference edges (above spokes, below nodes)
+        const colEdgesLayer = this._mkSVG('g', { id: 'ont-col-edges' });
+        root.appendChild(colEdgesLayer);
+        this._colEdgesLayer = colEdgesLayer;
+        this._colEdgeMap = new Map(); // key: "msrSat::colSat" → <line> element
 
         const nodeLayer = this._mkSVG('g', { id: 'ont-nodes' });
         root.appendChild(nodeLayer);
@@ -226,7 +233,8 @@ class OntologyRenderer {
                 radius: 19,
                 orbitR: OUTER_R,
                 angle:  (2 * Math.PI * i / Math.max(totalMsrSlots, 1)) - Math.PI / 2,
-                x: node.x, y: node.y, _grp: null, _spoke: null
+                x: node.x, y: node.y, _grp: null, _spoke: null,
+                colRefs: this._parseDaxColumnRefs(m.expression || '', node.name)
             });
         });
         if (extraMsrs > 0) {
@@ -240,6 +248,29 @@ class OntologyRenderer {
         }
 
         return sats;
+    }
+
+    _parseDaxColumnRefs(expr, defaultTable) {
+        const refs = [];
+        const seen = new Set();
+        // Match explicit Table[Column] references
+        const re = /(\w[\w\s]*?)\s*\[([^\]]+)\]/g;
+        let m;
+        while ((m = re.exec(expr)) !== null) {
+            const tableName = m[1].trim();
+            const colName   = m[2].trim();
+            const key = `${tableName}::${colName}`;
+            if (!seen.has(key)) { seen.add(key); refs.push({ tableName, colName }); }
+        }
+        // Match standalone [Column] (same table, after removing the above)
+        const stripped = expr.replace(/\w[\w\s]*?\s*\[[^\]]+\]/g, '');
+        const re2 = /\[([^\]]+)\]/g;
+        while ((m = re2.exec(stripped)) !== null) {
+            const colName = m[1].trim();
+            const key = `${defaultTable}::${colName}`;
+            if (!seen.has(key)) { seen.add(key); refs.push({ tableName: defaultTable, colName }); }
+        }
+        return refs;
     }
 
     _colTypeColor(dt) {
@@ -635,6 +666,8 @@ class OntologyRenderer {
             }
         });
 
+        this._updateColEdges();
+
         this._edges.forEach(edge => {
             if (!edge._path) return;
             const a  = this._nodes[edge.from];
@@ -654,6 +687,65 @@ class OntologyRenderer {
                 edge._label.setAttribute('x', cx.toFixed(1));
                 edge._label.setAttribute('y', (cy - 9).toFixed(1));
             }
+        });
+    }
+
+    // Draw edges from each visible measure satellite to the column satellites it references
+    _updateColEdges() {
+        if (!this._colEdgesLayer || !this._colEdgeMap) return;
+
+        // Build lookup: "tableName::colName" → sat (only for expanded tables)
+        const colLookup = new Map();
+        this._nodes.forEach(node => {
+            if (!node.expanded) return;
+            node.satellites.forEach(sat => {
+                if (sat.type === 'column' && sat._grp && sat._grp.style.display !== 'none') {
+                    colLookup.set(`${node.name}::${sat.name}`, sat);
+                }
+            });
+        });
+
+        // Track which edge keys are still active this frame
+        const active = new Set();
+
+        this._nodes.forEach(node => {
+            if (!node.expanded) return;
+            node.satellites.forEach(mSat => {
+                if (mSat.type !== 'measure' || !mSat.colRefs) return;
+                mSat.colRefs.forEach(ref => {
+                    const colSat = colLookup.get(`${ref.tableName}::${ref.colName}`);
+                    if (!colSat) return;
+
+                    const edgeKey = `${node.name}::${mSat.name}→${ref.tableName}::${ref.colName}`;
+                    active.add(edgeKey);
+
+                    // Get or create the line element
+                    let line = this._colEdgeMap.get(edgeKey);
+                    if (!line) {
+                        line = this._mkSVG('line', {
+                            stroke: '#a78bfa', 'stroke-width': '1',
+                            'stroke-dasharray': '4,3', opacity: '0.6',
+                            'pointer-events': 'none'
+                        });
+                        this._colEdgesLayer.appendChild(line);
+                        this._colEdgeMap.set(edgeKey, line);
+                    }
+                    line.style.display = '';
+
+                    // Position: from measure node centre to column node centre
+                    const dx = colSat.x - mSat.x, dy = colSat.y - mSat.y;
+                    const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                    line.setAttribute('x1', (mSat.x  + dx / d * mSat.radius).toFixed(1));
+                    line.setAttribute('y1', (mSat.y  + dy / d * mSat.radius).toFixed(1));
+                    line.setAttribute('x2', (colSat.x - dx / d * colSat.radius).toFixed(1));
+                    line.setAttribute('y2', (colSat.y - dy / d * colSat.radius).toFixed(1));
+                });
+            });
+        });
+
+        // Hide edges whose endpoints are no longer both visible
+        this._colEdgeMap.forEach((line, key) => {
+            if (!active.has(key)) line.style.display = 'none';
         });
     }
 
