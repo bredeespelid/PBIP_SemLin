@@ -24,6 +24,7 @@ class OntologyRenderer {
         this._H = 600;
         this._container = null;
         this._defs = null;
+        this._showHidden = false;
     }
 
     destroy() {
@@ -95,6 +96,8 @@ class OntologyRenderer {
 
         this._createEdgeElements(edgeLayer);
         this._createNodeElements(nodeLayer, container);
+        // Default: hide hidden-table nodes immediately after DOM creation
+        this._setHiddenVisibility(false);
 
         container.appendChild(svg);
 
@@ -161,7 +164,8 @@ class OntologyRenderer {
                 expanded: false,
                 satellites: [],      // built lazily on first expand
                 x: 0, y: 0, vx: 0, vy: 0,
-                _pinned: false, _grp: null, _circle: null, _selected: false
+                _pinned: false, _grp: null, _circle: null, _selected: false,
+                _hideNode: typeKey === 'hidden'
             };
         });
 
@@ -587,9 +591,9 @@ class OntologyRenderer {
         if (this._alpha > 0.003) {
             this._alpha *= 0.974;
 
-            const REPK    = 7500;
+            const REPK    = 11000;
             const SPRINGK = 0.032;
-            const REST    = 190;
+            const REST    = 260;
             const DAMP    = 0.80;
             const CENK    = 0.007;
             const nodes   = this._nodes;
@@ -598,15 +602,17 @@ class OntologyRenderer {
             nodes.forEach(n => { n._fx = 0; n._fy = 0; });
 
             for (let i = 0; i < nodes.length; i++) {
+                if (!this._showHidden && nodes[i]._hideNode) continue;
                 for (let j = i + 1; j < nodes.length; j++) {
+                    if (!this._showHidden && nodes[j]._hideNode) continue;
                     const a = nodes[i], b = nodes[j];
                     // Expanded nodes need more personal space
-                    const ra = a.expanded ? a.radius + 115 : a.radius;
-                    const rb = b.expanded ? b.radius + 115 : b.radius;
+                    const ra = a.expanded ? a.radius + 160 : a.radius;
+                    const rb = b.expanded ? b.radius + 160 : b.radius;
                     const dx = b.x - a.x, dy = b.y - a.y;
                     const d2 = dx * dx + dy * dy + 1;
                     const d  = Math.sqrt(d2);
-                    const f  = d < ra + rb + 24 ? (REPK * 2.5) / d2 : REPK / d2;
+                    const f  = d < ra + rb + 30 ? (REPK * 2.5) / d2 : REPK / d2;
                     const fx = f * dx / d, fy = f * dy / d;
                     a._fx -= fx; a._fy -= fy;
                     b._fx += fx; b._fy += fy;
@@ -615,6 +621,7 @@ class OntologyRenderer {
 
             edges.forEach(e => {
                 const a = nodes[e.from], b = nodes[e.to];
+                if (!this._showHidden && (a._hideNode || b._hideNode)) return;
                 const dx = b.x - a.x, dy = b.y - a.y;
                 const d  = Math.sqrt(dx * dx + dy * dy) + 0.01;
                 const f  = SPRINGK * (d - REST);
@@ -623,10 +630,14 @@ class OntologyRenderer {
                 b._fx -= fx; b._fy -= fy;
             });
 
-            nodes.forEach(n => { n._fx -= CENK * n.x; n._fy -= CENK * n.y; });
+            nodes.forEach(n => {
+                if (!this._showHidden && n._hideNode) return;
+                n._fx -= CENK * n.x; n._fy -= CENK * n.y;
+            });
 
             nodes.forEach(n => {
                 if (n._pinned) return;
+                if (!this._showHidden && n._hideNode) return;
                 n.vx = (n.vx + n._fx) * DAMP;
                 n.vy = (n.vy + n._fy) * DAMP;
                 n.x += n.vx;
@@ -640,6 +651,7 @@ class OntologyRenderer {
 
     _updateDOM() {
         this._nodes.forEach(node => {
+            if (!this._showHidden && node._hideNode) return;
             if (node._grp) {
                 node._grp.setAttribute('transform',
                     `translate(${node.x.toFixed(1)},${node.y.toFixed(1)})`);
@@ -690,11 +702,11 @@ class OntologyRenderer {
         });
     }
 
-    // Draw edges from each visible measure satellite to the column satellites it references
+    // Draw bundled edges from each visible column to all measure satellites that reference it
     _updateColEdges() {
         if (!this._colEdgesLayer || !this._colEdgeMap) return;
 
-        // Build lookup: "tableName::colName" → sat (only for expanded tables)
+        // Build lookup: "tableName::colName" → colSat (only for expanded tables)
         const colLookup = new Map();
         this._nodes.forEach(node => {
             if (!node.expanded) return;
@@ -705,47 +717,124 @@ class OntologyRenderer {
             });
         });
 
-        // Track which edge keys are still active this frame
-        const active = new Set();
-
+        // Build per-column measure list: colKey → [mSat, ...]
+        const colToMsrs = new Map();
         this._nodes.forEach(node => {
             if (!node.expanded) return;
             node.satellites.forEach(mSat => {
                 if (mSat.type !== 'measure' || !mSat.colRefs) return;
                 mSat.colRefs.forEach(ref => {
-                    const colSat = colLookup.get(`${ref.tableName}::${ref.colName}`);
-                    if (!colSat) return;
-
-                    const edgeKey = `${node.name}::${mSat.name}→${ref.tableName}::${ref.colName}`;
-                    active.add(edgeKey);
-
-                    // Get or create the line element
-                    let line = this._colEdgeMap.get(edgeKey);
-                    if (!line) {
-                        line = this._mkSVG('line', {
-                            stroke: '#a78bfa', 'stroke-width': '1',
-                            'stroke-dasharray': '4,3', opacity: '0.6',
-                            'pointer-events': 'none'
-                        });
-                        this._colEdgesLayer.appendChild(line);
-                        this._colEdgeMap.set(edgeKey, line);
-                    }
-                    line.style.display = '';
-
-                    // Position: from measure node centre to column node centre
-                    const dx = colSat.x - mSat.x, dy = colSat.y - mSat.y;
-                    const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
-                    line.setAttribute('x1', (mSat.x  + dx / d * mSat.radius).toFixed(1));
-                    line.setAttribute('y1', (mSat.y  + dy / d * mSat.radius).toFixed(1));
-                    line.setAttribute('x2', (colSat.x - dx / d * colSat.radius).toFixed(1));
-                    line.setAttribute('y2', (colSat.y - dy / d * colSat.radius).toFixed(1));
+                    const colKey = `${ref.tableName}::${ref.colName}`;
+                    if (!colLookup.has(colKey)) return;
+                    if (!colToMsrs.has(colKey)) colToMsrs.set(colKey, []);
+                    colToMsrs.get(colKey).push(mSat);
                 });
             });
         });
 
-        // Hide edges whose endpoints are no longer both visible
-        this._colEdgeMap.forEach((line, key) => {
-            if (!active.has(key)) line.style.display = 'none';
+        const active = new Set(colToMsrs.keys());
+
+        colToMsrs.forEach((msrList, colKey) => {
+            const colSat = colLookup.get(colKey);
+            if (!colSat) return;
+
+            let path = this._colEdgeMap.get(colKey);
+            if (!path) {
+                path = this._mkSVG('path', {
+                    fill: 'none', stroke: '#a78bfa', 'stroke-width': '1.3',
+                    'stroke-dasharray': '4,3', opacity: '0.65',
+                    'pointer-events': 'none'
+                });
+                this._colEdgesLayer.appendChild(path);
+                this._colEdgeMap.set(colKey, path);
+            }
+            path.style.display = '';
+
+            if (msrList.length === 1) {
+                // Single measure → straight line
+                const mSat = msrList[0];
+                const dx = mSat.x - colSat.x, dy = mSat.y - colSat.y;
+                const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                const x1 = (colSat.x + dx / d * colSat.radius).toFixed(1);
+                const y1 = (colSat.y + dy / d * colSat.radius).toFixed(1);
+                const x2 = (mSat.x  - dx / d * mSat.radius).toFixed(1);
+                const y2 = (mSat.y  - dy / d * mSat.radius).toFixed(1);
+                path.setAttribute('d', `M${x1},${y1} L${x2},${y2}`);
+            } else {
+                // Multiple measures → trunk + branches
+                // Centroid of all measure positions
+                let cx = 0, cy = 0;
+                msrList.forEach(m => { cx += m.x; cy += m.y; });
+                cx /= msrList.length; cy /= msrList.length;
+
+                // Junction: 45% from column toward centroid
+                const jx = colSat.x + (cx - colSat.x) * 0.45;
+                const jy = colSat.y + (cy - colSat.y) * 0.45;
+
+                // Trunk start at column edge
+                const tdx = jx - colSat.x, tdy = jy - colSat.y;
+                const td  = Math.sqrt(tdx * tdx + tdy * tdy) + 0.001;
+                const tx1 = (colSat.x + tdx / td * colSat.radius).toFixed(1);
+                const ty1 = (colSat.y + tdy / td * colSat.radius).toFixed(1);
+
+                let d = `M${tx1},${ty1} L${jx.toFixed(1)},${jy.toFixed(1)}`;
+
+                msrList.forEach(mSat => {
+                    const bdx = mSat.x - jx, bdy = mSat.y - jy;
+                    const bd  = Math.sqrt(bdx * bdx + bdy * bdy) + 0.001;
+                    const bx2 = (mSat.x - bdx / bd * mSat.radius).toFixed(1);
+                    const by2 = (mSat.y - bdy / bd * mSat.radius).toFixed(1);
+                    d += ` M${jx.toFixed(1)},${jy.toFixed(1)} L${bx2},${by2}`;
+                });
+
+                path.setAttribute('d', d);
+            }
+        });
+
+        // Hide paths for columns that are no longer active
+        this._colEdgeMap.forEach((path, key) => {
+            if (!active.has(key)) path.style.display = 'none';
+        });
+    }
+
+    // ─── Hidden table visibility ─────────────────────────────────────────────
+
+    _setHiddenVisibility(show) {
+        this._showHidden = show;
+
+        if (show) {
+            // Scatter hidden nodes near centre before revealing them
+            this._nodes.forEach(n => {
+                if (!n._hideNode) return;
+                n.x = (Math.random() - 0.5) * 150;
+                n.y = (Math.random() - 0.5) * 150;
+                n.vx = 0; n.vy = 0;
+                if (n._grp) n._grp.style.display = '';
+            });
+            this._alpha = Math.max(this._alpha, 0.6);
+        } else {
+            this._nodes.forEach(n => {
+                if (!n._hideNode) return;
+                if (n._grp) n._grp.style.display = 'none';
+                // Collapse any expanded satellites
+                if (n.expanded) {
+                    n.expanded = false;
+                    n.satellites.forEach(sat => {
+                        if (sat._grp)   sat._grp.style.display   = 'none';
+                        if (sat._spoke) sat._spoke.style.display = 'none';
+                    });
+                    if (n._expandDot) n._expandDot.setAttribute('fill', 'white');
+                }
+            });
+        }
+
+        // Show/hide relationship edges that touch a hidden node
+        this._edges.forEach(edge => {
+            const a = this._nodes[edge.from];
+            const b = this._nodes[edge.to];
+            const hiddenEdge = !show && (a._hideNode || b._hideNode);
+            if (edge._path)  edge._path.style.display  = hiddenEdge ? 'none' : '';
+            if (edge._label) edge._label.style.display = hiddenEdge ? 'none' : '';
         });
     }
 
@@ -998,6 +1087,23 @@ class OntologyRenderer {
             <div class="ont-legend-sep"></div>
             <div class="ont-legend-hint">Click to expand · Drag · Scroll to zoom</div>
         `;
+
+        const hiddenCount = this._nodes.filter(n => n._hideNode).length;
+        if (hiddenCount > 0) {
+            const btn = document.createElement('button');
+            btn.className = 'ont-hidden-toggle';
+            btn.textContent = `Show hidden tables (${hiddenCount})`;
+            btn.addEventListener('click', () => {
+                const nowShow = !this._showHidden;
+                this._setHiddenVisibility(nowShow);
+                btn.textContent = nowShow
+                    ? `Hide hidden tables (${hiddenCount})`
+                    : `Show hidden tables (${hiddenCount})`;
+                btn.classList.toggle('ont-hidden-toggle--active', nowShow);
+            });
+            div.appendChild(btn);
+        }
+
         container.appendChild(div);
     }
 

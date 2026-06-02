@@ -3640,6 +3640,31 @@ tr:hover {
     margin-top: 2px;
 }
 
+/* Toggle button for hidden tables */
+.ont-hidden-toggle {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 5px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    border: 1.5px solid #64748b;
+    border-radius: 6px;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    text-align: center;
+    transition: background 0.15s, color 0.15s;
+}
+.ont-hidden-toggle:hover {
+    background: rgba(100,116,139,0.12);
+}
+.ont-hidden-toggle--active {
+    background: rgba(100,116,139,0.15);
+    border-color: #475569;
+    color: #475569;
+}
+
 /* DAX block inside detail panel */
 .ont-dax-block {
     margin: 0;
