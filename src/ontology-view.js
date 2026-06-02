@@ -189,8 +189,8 @@ class OntologyRenderer {
     // Build satellite descriptors for a table node (called once, lazily)
     _buildSatellites(node) {
         const sats    = [];
-        const INNER_R = node.radius + 55;   // columns
-        const OUTER_R = node.radius + 108;  // measures
+        const INNER_R = node.radius + 72;   // columns — longer spokes, more breathing room
+        const OUTER_R = node.radius + 152; // measures — wide gap between rings for arc edges
 
         const MAX_COLS = 14;
         const MAX_MSRS = 10;
@@ -607,8 +607,8 @@ class OntologyRenderer {
                     if (!this._showHidden && nodes[j]._hideNode) continue;
                     const a = nodes[i], b = nodes[j];
                     // Expanded nodes need more personal space
-                    const ra = a.expanded ? a.radius + 160 : a.radius;
-                    const rb = b.expanded ? b.radius + 160 : b.radius;
+                    const ra = a.expanded ? a.radius + 188 : a.radius;
+                    const rb = b.expanded ? b.radius + 188 : b.radius;
                     const dx = b.x - a.x, dy = b.y - a.y;
                     const d2 = dx * dx + dy * dy + 1;
                     const d  = Math.sqrt(d2);
@@ -702,11 +702,13 @@ class OntologyRenderer {
         });
     }
 
-    // Draw bundled edges from each visible column to all measure satellites that reference it
+    // Draw arc edges from each visible column to all measure satellites that reference it.
+    // All arcs are constrained to the annular zone between the two orbit rings — they
+    // never cross inward past the column ring or outward past the measure ring.
     _updateColEdges() {
         if (!this._colEdgesLayer || !this._colEdgeMap) return;
 
-        // Build lookup: "tableName::colName" → colSat (only for expanded tables)
+        // Build lookup: "tableName::colName" → colSat
         const colLookup = new Map();
         this._nodes.forEach(node => {
             if (!node.expanded) return;
@@ -717,34 +719,48 @@ class OntologyRenderer {
             });
         });
 
-        // Build per-column measure list: colKey → [mSat, ...]
-        const colToMsrs = new Map();
+        // Build per-column measure list, storing the parent node for arc geometry
+        const colToMsrs = new Map(); // colKey → { msrList, node }
         this._nodes.forEach(node => {
             if (!node.expanded) return;
             node.satellites.forEach(mSat => {
                 if (mSat.type !== 'measure' || !mSat.colRefs) return;
                 mSat.colRefs.forEach(ref => {
-                    // Only draw intra-table edges; cross-table refs are covered by relationship arrows
-                    if (ref.tableName !== node.name) return;
+                    if (ref.tableName !== node.name) return; // intra-table only
                     const colKey = `${ref.tableName}::${ref.colName}`;
                     if (!colLookup.has(colKey)) return;
-                    if (!colToMsrs.has(colKey)) colToMsrs.set(colKey, []);
-                    colToMsrs.get(colKey).push(mSat);
+                    if (!colToMsrs.has(colKey)) colToMsrs.set(colKey, { msrList: [], node });
+                    colToMsrs.get(colKey).msrList.push(mSat);
                 });
             });
         });
 
         const active = new Set(colToMsrs.keys());
 
-        colToMsrs.forEach((msrList, colKey) => {
+        // Midpoint angle along the shorter arc between two angles
+        const shortMid = (a, b) => {
+            let d = b - a;
+            if (d >  Math.PI) d -= 2 * Math.PI;
+            if (d < -Math.PI) d += 2 * Math.PI;
+            return a + d * 0.5;
+        };
+
+        // Point on a node circle's edge in the direction of target (tx, ty)
+        const ep = (nx, ny, tx, ty, r) => {
+            const dx = tx - nx, dy = ty - ny;
+            const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+            return [nx + dx / d * r, ny + dy / d * r];
+        };
+
+        colToMsrs.forEach(({ msrList, node: pNode }, colKey) => {
             const colSat = colLookup.get(colKey);
             if (!colSat) return;
 
             let path = this._colEdgeMap.get(colKey);
             if (!path) {
                 path = this._mkSVG('path', {
-                    fill: 'none', stroke: '#a78bfa', 'stroke-width': '1.3',
-                    'stroke-dasharray': '4,3', opacity: '0.65',
+                    fill: 'none', stroke: '#a78bfa', 'stroke-width': '1.4',
+                    'stroke-dasharray': '4,3', opacity: '0.7',
                     'pointer-events': 'none'
                 });
                 this._colEdgesLayer.appendChild(path);
@@ -752,48 +768,62 @@ class OntologyRenderer {
             }
             path.style.display = '';
 
+            const innerR   = colSat.orbitR;
+            const outerR   = msrList[0].orbitR;
+            const gap      = outerR - innerR;
+            const colAngle = Math.atan2(colSat.y - pNode.y, colSat.x - pNode.x);
+
             if (msrList.length === 1) {
-                // Single measure → straight line
-                const mSat = msrList[0];
-                const dx = mSat.x - colSat.x, dy = mSat.y - colSat.y;
-                const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
-                const x1 = (colSat.x + dx / d * colSat.radius).toFixed(1);
-                const y1 = (colSat.y + dy / d * colSat.radius).toFixed(1);
-                const x2 = (mSat.x  - dx / d * mSat.radius).toFixed(1);
-                const y2 = (mSat.y  - dy / d * mSat.radius).toFixed(1);
-                path.setAttribute('d', `M${x1},${y1} L${x2},${y2}`);
+                // Single measure: quadratic bezier, control point at 70% of gap along
+                // the short-arc mid-angle. Curve stays entirely in the annular zone.
+                const mSat     = msrList[0];
+                const msrAngle = Math.atan2(mSat.y - pNode.y, mSat.x - pNode.x);
+                const ma       = shortMid(colAngle, msrAngle);
+                const cpR      = innerR + gap * 0.70;
+                const cpx      = pNode.x + Math.cos(ma) * cpR;
+                const cpy      = pNode.y + Math.sin(ma) * cpR;
+                const [x1, y1] = ep(colSat.x, colSat.y, cpx, cpy, colSat.radius);
+                const [x2, y2] = ep(mSat.x,   mSat.y,   cpx, cpy, mSat.radius);
+                path.setAttribute('d',
+                    `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cpx.toFixed(1)},${cpy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`);
+
             } else {
-                // Multiple measures → trunk + branches
-                // Centroid of all measure positions
-                let cx = 0, cy = 0;
-                msrList.forEach(m => { cx += m.x; cy += m.y; });
-                cx /= msrList.length; cy /= msrList.length;
+                // Multiple measures: arc trunk from column to a junction in the gap,
+                // then arc branches from junction to each measure.
 
-                // Junction: 45% from column toward centroid
-                const jx = colSat.x + (cx - colSat.x) * 0.45;
-                const jy = colSat.y + (cy - colSat.y) * 0.45;
+                // Junction at gap midpoint, in the average direction of all measures
+                let avgDx = 0, avgDy = 0;
+                msrList.forEach(m => { avgDx += m.x - pNode.x; avgDy += m.y - pNode.y; });
+                avgDx /= msrList.length; avgDy /= msrList.length;
+                const avgD   = Math.sqrt(avgDx * avgDx + avgDy * avgDy) + 0.001;
+                const jAngle = Math.atan2(avgDy, avgDx);
+                const jR     = innerR + gap * 0.48;
+                const jx     = pNode.x + Math.cos(jAngle) * jR;
+                const jy     = pNode.y + Math.sin(jAngle) * jR;
 
-                // Trunk start at column edge
-                const tdx = jx - colSat.x, tdy = jy - colSat.y;
-                const td  = Math.sqrt(tdx * tdx + tdy * tdy) + 0.001;
-                const tx1 = (colSat.x + tdx / td * colSat.radius).toFixed(1);
-                const ty1 = (colSat.y + tdy / td * colSat.radius).toFixed(1);
+                // Trunk: colSat → junction; control at 28% of gap, mid-angle
+                const ma_t   = shortMid(colAngle, jAngle);
+                const tcpR   = innerR + gap * 0.28;
+                const tcpx   = pNode.x + Math.cos(ma_t) * tcpR;
+                const tcpy   = pNode.y + Math.sin(ma_t) * tcpR;
+                const [tx1, ty1] = ep(colSat.x, colSat.y, tcpx, tcpy, colSat.radius);
+                let d = `M${tx1.toFixed(1)},${ty1.toFixed(1)} Q${tcpx.toFixed(1)},${tcpy.toFixed(1)} ${jx.toFixed(1)},${jy.toFixed(1)}`;
 
-                let d = `M${tx1},${ty1} L${jx.toFixed(1)},${jy.toFixed(1)}`;
-
+                // Branches: junction → each measure; control at 78% of gap, mid-angle
                 msrList.forEach(mSat => {
-                    const bdx = mSat.x - jx, bdy = mSat.y - jy;
-                    const bd  = Math.sqrt(bdx * bdx + bdy * bdy) + 0.001;
-                    const bx2 = (mSat.x - bdx / bd * mSat.radius).toFixed(1);
-                    const by2 = (mSat.y - bdy / bd * mSat.radius).toFixed(1);
-                    d += ` M${jx.toFixed(1)},${jy.toFixed(1)} L${bx2},${by2}`;
+                    const msrAngle  = Math.atan2(mSat.y - pNode.y, mSat.x - pNode.x);
+                    const ma_b      = shortMid(jAngle, msrAngle);
+                    const bcpR      = innerR + gap * 0.78;
+                    const bcpx      = pNode.x + Math.cos(ma_b) * bcpR;
+                    const bcpy      = pNode.y + Math.sin(ma_b) * bcpR;
+                    const [bx2, by2] = ep(mSat.x, mSat.y, bcpx, bcpy, mSat.radius);
+                    d += ` M${jx.toFixed(1)},${jy.toFixed(1)} Q${bcpx.toFixed(1)},${bcpy.toFixed(1)} ${bx2.toFixed(1)},${by2.toFixed(1)}`;
                 });
 
                 path.setAttribute('d', d);
             }
         });
 
-        // Hide paths for columns that are no longer active
         this._colEdgeMap.forEach((path, key) => {
             if (!active.has(key)) path.style.display = 'none';
         });
