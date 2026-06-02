@@ -195,7 +195,7 @@ class OntologyRenderer {
         nodes.forEach(n => {
             n._usedInReports = false;
             if (fum) {
-                for (const key of fum.keys()) {
+                for (const key of Object.keys(fum)) {
                     if (key.split('|')[1] === n.name) { n._usedInReports = true; break; }
                 }
             }
@@ -204,7 +204,7 @@ class OntologyRenderer {
         // Store which specific measures/columns are used (for satellite highlighting)
         this._reportUsedSet = new Set();
         if (fum) {
-            for (const key of fum.keys()) {
+            for (const key of Object.keys(fum)) {
                 const [type, table, field] = key.split('|');
                 if (type === 'measure' || type === 'column') {
                     this._reportUsedSet.add(`${table}::${field}`);
@@ -560,7 +560,7 @@ class OntologyRenderer {
                     fill: 'white', stroke: node.color, 'stroke-width': '1.2', opacity: '0.8'
                 });
                 node._expandDot = expandDot;
-                grp.appendChild(expandDot); // added later in correct z-order below
+                // appended in correct z-order below
             }
 
             const initText = this._mkSVG('text', {
