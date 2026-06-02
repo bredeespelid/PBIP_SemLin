@@ -272,8 +272,7 @@ class OntologyRenderer {
             return a.name.localeCompare(b.name);
         });
         const showCols  = cols.slice(0, MAX_COLS);
-        const extraCols = cols.length - showCols.length;
-        const totalColSlots = showCols.length + (extraCols > 0 ? 1 : 0);
+        const totalColSlots = showCols.length;
 
         // Build column index map for barycenter computation
         const colIdx = new Map();
@@ -289,24 +288,13 @@ class OntologyRenderer {
                 x: node.x, y: node.y, _grp: null, _spoke: null
             });
         });
-        if (extraCols > 0) {
-            sats.push({
-                type: 'more-cols', name: `+${extraCols}`,
-                color: '#94a3b8', radius: 11,
-                orbitR: INNER_R,
-                angle:  (2 * Math.PI * MAX_COLS / Math.max(totalColSlots, 1)) - Math.PI / 2,
-                x: node.x, y: node.y, _grp: null, _spoke: null
-            });
-        }
-
         // Measures in outer ring — sorted by barycenter to minimise arc crossings
         const showMsrs  = node.measures.slice(0, MAX_MSRS);
         showMsrs.sort((a, b) =>
             this._msrBarycenter(a, node.name, colIdx, showCols.length) -
             this._msrBarycenter(b, node.name, colIdx, showCols.length)
         );
-        const extraMsrs = node.measures.length - showMsrs.length;
-        const totalMsrSlots = showMsrs.length + (extraMsrs > 0 ? 1 : 0);
+        const totalMsrSlots = showMsrs.length;
 
         showMsrs.forEach((m, i) => {
             sats.push({
@@ -319,15 +307,6 @@ class OntologyRenderer {
                 colRefs: this._parseDaxColumnRefs(m.expression || '', node.name)
             });
         });
-        if (extraMsrs > 0) {
-            sats.push({
-                type: 'more-msrs', name: `+${extraMsrs}`,
-                color: '#7c3aed', radius: 13,
-                orbitR: OUTER_R,
-                angle:  (2 * Math.PI * MAX_MSRS / Math.max(totalMsrSlots, 1)) - Math.PI / 2,
-                x: node.x, y: node.y, _grp: null, _spoke: null
-            });
-        }
 
         return sats;
     }
