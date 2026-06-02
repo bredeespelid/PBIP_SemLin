@@ -29,16 +29,16 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@400;700;900&family=Source+Serif+4:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
-    <script src="bpa-engine.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script defer src="https://unpkg.com/svg2pdf.js@2.2.4/dist/svg2pdf.umd.min.js"></script>
+    <link rel="stylesheet" href="src/styles.css">
+    <script src="src/bpa-engine.js"></script>
+    <script defer src="src/vendors/jspdf.umd.min.js"></script>
+    <script defer src="src/vendors/svg2pdf.umd.min.js"></script>
 </head>
 <body>
     <!-- Header -->
     <header class="app-header">
         <div class="header-left">
-            <img src="Power-BI.png" alt="Power BI" class="header-logo">
+            <img src="src/Power-BI.png" alt="Power BI" class="header-logo">
             <span class="header-title">Internal PBIP Documenter</span>
             <span class="header-subtitle">Power BI Semantic Lineage & Visual Documentation</span>
         </div>
@@ -766,19 +766,18 @@
         <div id="bpaModalContent" class="bpa-learning-body"></div>
     </div>
 
-    <!-- Scripts -->
-    <script src="bpa-engine.js"></script>
-    <script src="tmdl-parser.js"></script>
-    <script src="visual-parser.js"></script>
-    <script src="m-parser.js"></script>
-    <script src="lineage-engine.js?v=20260301a"></script>
-    <script src="lineage-diagram.js?v=20260306a"></script>
-    <script src="doc-generator.js"></script>
-    <script src="diagram.js"></script>
-    <script src="detailed-erd.js"></script>
-    <script src="drawio-exporter.js"></script>
-    <script src="mermaid-exporter.js"></script>
-    <script src="app.js"></script>
+    <script src="src/bpa-engine.js"></script>
+    <script src="src/tmdl-parser.js"></script>
+    <script src="src/visual-parser.js"></script>
+    <script src="src/m-parser.js"></script>
+    <script src="src/lineage-engine.js?v=20260301a"></script>
+    <script src="src/lineage-diagram.js?v=20260306a"></script>
+    <script src="src/doc-generator.js"></script>
+    <script src="src/diagram.js"></script>
+    <script src="src/detailed-erd.js"></script>
+    <script src="src/drawio-exporter.js"></script>
+    <script src="src/mermaid-exporter.js"></script>
+    <script src="src/app.js"></script>
 
     <!-- Sponsor Toast Script -->
     <script>
