@@ -216,11 +216,16 @@ class OntologyRenderer {
         const MAX_RPT = 30;
         if (this.visualData?.pages) {
             this.visualData.pages.slice(0, MAX_RPT).forEach((page, pi) => {
-                const tablesInPage = new Set();
+                // Collect per-field edges: "tName|fieldName" deduped per page
+                const tablesInPage  = new Set();
+                const fieldsInPage  = new Set(); // "tName|fieldName"
                 (page.visuals || []).forEach(v => {
                     (v.fields || []).forEach(f => {
                         const t = f.table || f.entity;
-                        if (t && idx[t] !== undefined) tablesInPage.add(t);
+                        if (!t || idx[t] === undefined) return;
+                        tablesInPage.add(t);
+                        const fieldName = f.column || f.measure || f.attribute;
+                        if (fieldName) fieldsInPage.add(`${t}|${fieldName}`);
                     });
                 });
                 if (tablesInPage.size === 0) return;
@@ -245,11 +250,24 @@ class OntologyRenderer {
                     _tableCount: tablesInPage.size
                 });
 
-                tablesInPage.forEach(tName => {
-                    edges.push({ from: rNodeIdx, to: idx[tName],
-                        rel: null, card: '', _path: null, _label: null,
-                        _isReportEdge: true });
-                });
+                if (fieldsInPage.size > 0) {
+                    // Per-field edges — aim at satellite when table is expanded
+                    fieldsInPage.forEach(key => {
+                        const pipe = key.indexOf('|');
+                        const tName     = key.slice(0, pipe);
+                        const fieldName = key.slice(pipe + 1);
+                        edges.push({ from: rNodeIdx, to: idx[tName],
+                            rel: null, card: '', _path: null, _label: null,
+                            _isReportEdge: true, _reportField: fieldName });
+                    });
+                } else {
+                    // Fallback: table-level edges (no field info available)
+                    tablesInPage.forEach(tName => {
+                        edges.push({ from: rNodeIdx, to: idx[tName],
+                            rel: null, card: '', _path: null, _label: null,
+                            _isReportEdge: true });
+                    });
+                }
             });
         }
 
@@ -801,13 +819,22 @@ class OntologyRenderer {
             const dx = b.x - a.x, dy = b.y - a.y;
             const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
             if (edge._isReportEdge) {
-                // Report edge: gentle arc, no arrowhead
-                const sx = a.x + dx / d * (a.radius + 3);
-                const sy = a.y + dy / d * (a.radius + 3);
-                const ex = b.x - dx / d * (b.radius + 5);
-                const ey = b.y - dy / d * (b.radius + 5);
-                const cx = (sx + ex) / 2 - (dy / d) * 12;
-                const cy = (sy + ey) / 2 + (dx / d) * 12;
+                // When field is known and table is expanded, aim at the satellite
+                let tx = b.x, ty = b.y, endR = b.radius + 5;
+                if (edge._reportField && b.expanded) {
+                    const sat = b.satellites.find(s =>
+                        s.name === edge._reportField && s._grp &&
+                        s._grp.style.display !== 'none');
+                    if (sat) { tx = sat.x; ty = sat.y; endR = sat.radius + 3; }
+                }
+                const ddx = tx - a.x, ddy = ty - a.y;
+                const dd  = Math.sqrt(ddx * ddx + ddy * ddy) + 0.001;
+                const sx = a.x + ddx / dd * (a.radius + 3);
+                const sy = a.y + ddy / dd * (a.radius + 3);
+                const ex = tx  - ddx / dd * endR;
+                const ey = ty  - ddy / dd * endR;
+                const cx = (sx + ex) / 2 - (ddy / dd) * 12;
+                const cy = (sy + ey) / 2 + (ddx / dd) * 12;
                 edge._path.setAttribute('d',
                     `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
                 return;
@@ -1002,7 +1029,13 @@ class OntologyRenderer {
         });
         this._edges.forEach(e => {
             const a = this._nodes[e.from], b = this._nodes[e.to];
-            const vis = this._nodeVisible(a) && this._nodeVisible(b);
+            let vis = this._nodeVisible(a) && this._nodeVisible(b);
+            // For field-level report edges, also hide when the satellite is filtered out
+            if (vis && e._isReportEdge && e._reportField) {
+                vis = this._reportUsedSet.size === 0 ||
+                      !this._reportFilter ||
+                      this._reportUsedSet.has(`${b.name}::${e._reportField}`);
+            }
             if (e._path)  e._path.style.display  = vis ? '' : 'none';
             if (e._label) e._label.style.display  = (vis && e.card) ? '' : 'none';
         });
