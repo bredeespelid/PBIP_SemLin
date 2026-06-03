@@ -81,11 +81,11 @@ Hvis de jobber i dette repoet direkte kan de også bruke VS Code-tasken:
 
 ## Bygg dashboard — prototype og Fabric Data App
 
-Etter at en PBIP-modell er lastet i nettleserappen, kan brukeren klikke **Bygg dashboard** i download-baren.
+Etter at en PBIP-modell er lastet i nettleserappen kaller pbip-documenter-agenten `app.buildDashboard()` via JavaScript i nettleseren. Det finnes ingen synlig knapp — funksjonen er agent-styrt. Folder-velgeren (File System Access API) åpnes for brukeren.
 
 ### Hva som skrives til disk
 
-Brukeren velger en mappe via File System Access API. To filer skrives:
+Brukeren velger en mappe via folder-velgeren. To filer skrives:
 
 **`model-ctx.md`** — Copilot-kontekst for videre utvikling:
 - Alle tabeller med kolonner og datatyper
@@ -107,24 +107,19 @@ Brukeren velger en mappe via File System Access API. To filer skrives:
 1. Åpne `dashboard.html` i **VS Code Live Preview**
 2. Iterer med GitHub Copilot — alle feltnavn er i `model-ctx.md` og `const MODEL`
 3. Copilot vil lese `model-ctx.md` automatisk som kontekst
-4. Si **"jeg er ferdig"** → Copilot scaffolder et Rayfin Fabric Data App-prosjekt
+4. Si **"I'm done"** → agenten kaller `app.scaffoldRayfin()` og scaffolder et Rayfin Fabric Data App-prosjekt
 
-### "jeg er ferdig" — Rayfin scaffold-trigger
+### "I'm done" — Rayfin scaffold-trigger
 
-Når brukeren sier "jeg er ferdig" i en Copilot-samtale:
+Når brukeren sier "I'm done", kaller pbip-documenter-agenten `app.scaffoldRayfin()` via JavaScript i nettleseren (se "Scaffold Rayfin" under). Den gjenbruker mappen som allerede ble valgt i `buildDashboard()`.
 
-```bash
-bun create @microsoft/rayfin@latest -- "AppName" \
-  --template dataapp --workspace "WorkspaceName"
-```
-
-Frø Rayfin-prosjektet med:
+Rayfin-prosjektet frøes med:
 - `fabric.yaml` med workspace + modell-tilkobling
 - `AGENTS.md` som peker på `model-ctx.md` som modellkontekst
 - Én `.dax` + `.json` + `.ts` per top-5 measure etter visual coverage
   (bruk kun kolonne- og measurenavn fra `model-ctx.md` — aldri oppfinn navn)
 
-Lokal utvikling: `bun run dev` (localhost:5173, spørrer live modell)
+Lokal utvikling: `bun install && bun run dev` (localhost:5173, spørrer live modell)
 Deploy: `bunx rayfin up`
 
 ### Scaffold Rayfin
