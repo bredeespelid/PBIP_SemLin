@@ -80,8 +80,9 @@ If yes: add as a new measure in `definition/tables/{TableName}.tmdl`.
 
 ## Option 2 — Fabric Data App
 
-1. Click **Bygg dashboard** in the app, let the user pick a folder
-2. Confirm dashboard.html and model-ctx.md are written
+1. Execute in the browser: `app.buildDashboard()`
+   The folder picker will open — the user selects the destination folder.
+2. Confirm dashboard.html and model-ctx.md are written (toast message in app confirms)
 3. Open dashboard.html in VS Code Live Preview
 4. Say:
    > dashboard.html and model-ctx.md are ready. Iterate with Copilot in VS Code.
@@ -89,9 +90,8 @@ If yes: add as a new measure in `definition/tables/{TableName}.tmdl`.
 
 ### When the user says "I'm done"
 
-Tell them:
-> Go back to the PBIP SemLin app and click **Scaffold Rayfin** (appeared under "Bygg dashboard").
-> The app writes the full Rayfin project to the same folder.
+Execute in the browser: `app.scaffoldRayfin()`
+The app writes the full Rayfin project to the same folder (reuses the earlier folder pick).
 
 After they confirm, tell them to open a terminal and run:
 ```bash

@@ -127,10 +127,10 @@ Frø Rayfin-prosjektet med:
 Lokal utvikling: `bun run dev` (localhost:5173, spørrer live modell)
 Deploy: `bunx rayfin up`
 
-### "Scaffold Rayfin"-knappen
+### Scaffold Rayfin
 
-Etter at `buildDashboard()` lykkes vises en **Scaffold Rayfin**-underknapp i UI-et.
-Klikk på den for å skrive hele Rayfin-prosjektet direkte til den valgte mappen — ingen terminal nødvendig ennå.
+Agenten kaller `app.scaffoldRayfin()` via JavaScript i nettleseren etter at `buildDashboard()` har lykkes.
+Den gjenbruker den allerede valgte mappen (`_dashboardDirHandle`) — ingen ny mappevelger.
 Etter scaffold: `bun install && bun run dev` i den genererte mappen starter lokal preview på localhost:5173.
 
 ### D3 drilldown og matriser

@@ -69,9 +69,6 @@ class App {
         document.getElementById('downloadMDAll').addEventListener('click', (e) => this.downloadMarkdown('all', e.currentTarget));
         document.getElementById('downloadMDModel').addEventListener('click', (e) => this.downloadMarkdown('model', e.currentTarget));
         document.getElementById('downloadMDVisual').addEventListener('click', (e) => this.downloadMarkdown('visuals', e.currentTarget));
-        document.getElementById('buildDashboardBtn').addEventListener('click', (e) => this.buildDashboard(e.currentTarget));
-        const scaffoldBtn = document.getElementById('scaffoldRayfinBtn');
-        if (scaffoldBtn) scaffoldBtn.addEventListener('click', (e) => this.scaffoldRayfin(e.currentTarget));
 
         // Sidebar navigation
         document.querySelectorAll('.sidebar-header').forEach(header => {
@@ -3443,15 +3440,8 @@ class App {
             await htmlWritable.write(htmlContent);
             await htmlWritable.close();
 
-            // Cache the dir handle so scaffoldRayfin() can reuse it
+            // Cache the dir handle so scaffoldRayfin() can reuse it without reprompting
             this._dashboardDirHandle = dirHandle;
-
-            // Reveal the Scaffold Rayfin sub-button
-            const scaffoldBtn = document.getElementById('scaffoldRayfinBtn');
-            if (scaffoldBtn) {
-                scaffoldBtn.classList.remove('hidden');
-                scaffoldBtn.disabled = false;
-            }
 
             this.showToast('✓ dashboard.html + model-ctx.md skrevet til ' + dirHandle.name, 'success');
 
