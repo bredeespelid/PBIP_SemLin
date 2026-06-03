@@ -42,10 +42,13 @@ Screenshot the app, then respond:
 - [ ] Read measures from the Measures sidebar (screenshot → names and format strings)
 - [ ] Ask what the user wants to see
 - [ ] Read theme colors from the Report Theme sidebar (screenshot → exact hex values and font)
-- [ ] Write visual-preview.html
-- [ ] Open in VS Code Live Preview
+- [ ] Write visual-preview.html to `${workspaceFolder}`
+- [ ] Open it in a **new browser tab** (keep the index.html tab loaded so the model stays in memory)
+- [ ] Screenshot the preview tab to confirm it matches the request, then show the user
 - [ ] Iterate on feedback until user says "export", "done", or "looks good"
 - [ ] Generate DAX measure, offer to write to .tmdl
+
+Tell the user they can also open visual-preview.html in VS Code Live Preview for an in-editor view that auto-refreshes on each rewrite.
 
 ### visual-preview.html constraints
 
@@ -53,7 +56,7 @@ Inline styles only (no `<style>` tags, no classes) · No JavaScript · SVG allow
 Mock values: `"#,##0"`→`"1,234,567"` · `"0.0%"`→`"42.3%"` · `"$#,##0"`→`"$1,234,567"` · no format→round number
 Colors and font from the Report Theme tab (browser only).
 
-On each iteration: rewrite → reopen in Live Preview → confirm.
+On each iteration: rewrite the file → reload the preview tab → screenshot to confirm before replying. Never navigate the index.html tab away — it holds the parsed model.
 
 ### DAX export
 
