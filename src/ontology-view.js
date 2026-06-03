@@ -246,15 +246,24 @@ class OntologyRenderer {
         const MAX_RPT = 30;
         if (this.visualData?.pages) {
             this.visualData.pages.slice(0, MAX_RPT).forEach((page, pi) => {
-                const tablesInPage = new Set();
-                const fieldsInPage = new Set();
+                const tablesInPage     = new Set();
+                const fieldsInPage     = new Set(); // "tName|fieldName"
+                const tablesWithFields = new Set(); // tables where ≥1 field name was identified
+
                 (page.visuals || []).forEach(v => {
                     (v.fields || []).forEach(f => {
-                        const t = f.table || f.entity;
+                        const t = f.table || f.entity || f.Entity;
                         if (!t || idx[t] === undefined) return;
                         tablesInPage.add(t);
-                        const fieldName = f.column || f.measure || f.attribute;
-                        if (fieldName) fieldsInPage.add(`${t}|${fieldName}`);
+                        // Try all known PBIR field-name properties
+                        const fieldName = f.column || f.measure || f.attribute
+                                       || f.name   || f.field   || f.queryRef;
+                        if (fieldName) {
+                            // queryRef may be "Table.Field" — strip the table prefix
+                            const clean = fieldName.includes('.') ? fieldName.split('.').pop() : fieldName;
+                            fieldsInPage.add(`${t}|${clean}`);
+                            tablesWithFields.add(t);
+                        }
                     });
                 });
                 if (tablesInPage.size === 0) return;
@@ -279,20 +288,22 @@ class OntologyRenderer {
                     _tableCount: tablesInPage.size
                 });
 
-                if (fieldsInPage.size > 0) {
-                    fieldsInPage.forEach(key => {
-                        const pipe = key.indexOf('|');
-                        edges.push({ from: rNodeIdx, to: idx[key.slice(0, pipe)],
-                            rel: null, card: '', _path: null, _label: null,
-                            _isReportEdge: true, _reportField: key.slice(pipe + 1) });
-                    });
-                } else {
-                    tablesInPage.forEach(tName => {
+                // Per-field edges for every field we could identify
+                fieldsInPage.forEach(key => {
+                    const pipe = key.indexOf('|');
+                    edges.push({ from: rNodeIdx, to: idx[key.slice(0, pipe)],
+                        rel: null, card: '', _path: null, _label: null,
+                        _isReportEdge: true, _reportField: key.slice(pipe + 1) });
+                });
+
+                // Table-level fallback for tables where field extraction failed entirely
+                tablesInPage.forEach(tName => {
+                    if (!tablesWithFields.has(tName)) {
                         edges.push({ from: rNodeIdx, to: idx[tName],
                             rel: null, card: '', _path: null, _label: null,
                             _isReportEdge: true });
-                    });
-                }
+                    }
+                });
             });
         }
 
