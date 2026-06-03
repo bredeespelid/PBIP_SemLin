@@ -2,40 +2,35 @@
 
 class OntologyRenderer {
     constructor(model, lineageEngine, visualData, bpaResults) {
-        this.model = model;
-        this.lineageEngine = lineageEngine;
-        this.visualData = visualData;
-        this.bpaResults = bpaResults;
-        this._nodes = [];
-        this._edges = [];
-        this._dragging = null;
-        this._svg = null;
-        this._root = null;
-        this._spokesLayer = null;
+        this.model          = model;
+        this.lineageEngine  = lineageEngine;
+        this.visualData     = visualData;
+        this.bpaResults     = bpaResults;
+        this._nodes         = [];
+        this._edges         = [];
+        this._simulation    = null;
+        this._svgEl         = null;
+        this._root          = null;
+        this._spokesLayer   = null;
         this._colEdgesLayer = null;
-        this._satLayer = null;
-        this._alpha = 1.0;
-        this._running = false;
-        this._animFrame = null;
-        this._tx = 0;
-        this._ty = 0;
-        this._scale = 1;
-        this._W = 900;
-        this._H = 600;
-        this._container = null;
-        this._defs = null;
-        this._showHidden = false;
-        this._showReports = false;
-        this._reportFilter = false;
-        this._reportUsedSet = new Set(); // "table::field" used in any visual
+        this._satLayer      = null;
+        this._defs          = null;
+        this._container     = null;
+        this._W = 900; this._H = 600;
+        this._tx = 0;  this._ty = 0;  this._scale = 1;
+        this._showHidden    = false;
+        this._showReports   = false;
+        this._reportFilter  = false;
+        this._reportUsedSet = new Set();
+        this._colEdgeMap    = new Map();
+        this._dragging      = null;
+        this._highlightSet  = null;
+        this._onMouseMove   = null;
+        this._onMouseUp     = null;
     }
 
     destroy() {
-        this._running = false;
-        if (this._animFrame) {
-            cancelAnimationFrame(this._animFrame);
-            this._animFrame = null;
-        }
+        if (this._simulation) { this._simulation.stop(); this._simulation = null; }
         if (this._onMouseMove) window.removeEventListener('mousemove', this._onMouseMove);
         if (this._onMouseUp)   window.removeEventListener('mouseup',   this._onMouseUp);
         this._onMouseMove = null;
@@ -50,84 +45,124 @@ class OntologyRenderer {
         const { nodes, edges } = this._buildGraph();
         this._nodes = nodes;
         this._edges = edges;
-        // Stamp stable index used by visibility & attraction logic
         this._nodes.forEach((n, i) => { n._idx = i; });
 
-        const W = container.clientWidth || 900;
+        const W = container.clientWidth  || 900;
         const H = container.clientHeight || 580;
-        this._W = W;
-        this._H = H;
+        this._W = W; this._H = H;
 
-        const n = nodes.length;
         const initR = Math.min(W, H) * 0.3;
         nodes.forEach((node, i) => {
-            const angle = (2 * Math.PI * i / Math.max(n, 1)) - Math.PI / 2;
-            node.x = Math.cos(angle) * initR + (Math.random() - 0.5) * 20;
-            node.y = Math.sin(angle) * initR + (Math.random() - 0.5) * 20;
-            node.vx = 0;
-            node.vy = 0;
+            const angle = (2 * Math.PI * i / Math.max(nodes.length, 1)) - Math.PI / 2;
+            node.x  = Math.cos(angle) * initR + (Math.random() - 0.5) * 20;
+            node.y  = Math.sin(angle) * initR + (Math.random() - 0.5) * 20;
+            node.vx = 0; node.vy = 0;
         });
 
         const svg = this._mkSVG('svg', { width: '100%', height: '100%' });
         svg.style.cursor = 'grab';
-        this._svg = svg;
-
+        this._svgEl = svg;
         this._addDefs(svg);
 
         const root = this._mkSVG('g', { id: 'ont-root' });
         svg.appendChild(root);
         this._root = root;
 
-        // Layer order matters: edges → spokes → table nodes → satellites
-        const edgeLayer = this._mkSVG('g', { id: 'ont-edges' });
-        root.appendChild(edgeLayer);
-
-        const spokesLayer = this._mkSVG('g', { id: 'ont-spokes' });
-        root.appendChild(spokesLayer);
-        this._spokesLayer = spokesLayer;
-
-        // Measure→column reference edges (above spokes, below nodes)
+        const edgeLayer     = this._mkSVG('g', { id: 'ont-edges' });
+        const spokesLayer   = this._mkSVG('g', { id: 'ont-spokes' });
         const colEdgesLayer = this._mkSVG('g', { id: 'ont-col-edges' });
-        root.appendChild(colEdgesLayer);
+        const nodeLayer     = this._mkSVG('g', { id: 'ont-nodes' });
+        const satLayer      = this._mkSVG('g', { id: 'ont-satellites' });
+        [edgeLayer, spokesLayer, colEdgesLayer, nodeLayer, satLayer].forEach(l => root.appendChild(l));
+        this._spokesLayer   = spokesLayer;
         this._colEdgesLayer = colEdgesLayer;
-        this._colEdgeMap = new Map(); // key: "msrSat::colSat" → <line> element
-
-        const nodeLayer = this._mkSVG('g', { id: 'ont-nodes' });
-        root.appendChild(nodeLayer);
-
-        const satLayer = this._mkSVG('g', { id: 'ont-satellites' });
-        root.appendChild(satLayer);
-        this._satLayer = satLayer;
+        this._satLayer      = satLayer;
+        this._colEdgeMap    = new Map();
 
         this._createEdgeElements(edgeLayer);
         this._createNodeElements(nodeLayer, container);
-        // Default: hide hidden-table nodes immediately after DOM creation
         this._setHiddenVisibility(false);
 
         container.appendChild(svg);
-
-        this._tx = 0;
-        this._ty = 0;
-        this._scale = 1;
         this._applyRootTransform();
 
-        root.style.opacity = '0';
+        this._initInteraction(svg, container);
+        this._setupSimulation();
+
+        root.style.opacity   = '0';
         root.style.transition = 'opacity 0.5s ease';
         requestAnimationFrame(() => { root.style.opacity = '1'; });
-
-        this._initInteraction(svg, container);
-
-        this._alpha = 1.0;
-        this._running = true;
-        this._tick();
 
         this._addLegend(container);
 
         const panel = document.createElement('div');
         panel.className = 'ontology-detail';
-        panel.id = 'ontologyDetailPanel';
+        panel.id        = 'ontologyDetailPanel';
         panel.style.display = 'none';
         container.appendChild(panel);
+    }
+
+    // ─── D3 Force Simulation ─────────────────────────────────────────────────
+
+    _setupSimulation() {
+        const nodes = this._nodes;
+        const edges = this._edges;
+
+        // Relationship edges only — report edges handled by custom force
+        const links = edges
+            .filter(e => !e._isReportEdge)
+            .map(e => ({ source: e.from, target: e.to }));
+
+        this._simulation = d3.forceSimulation(nodes)
+            .force('link', d3.forceLink(links)
+                .id((_, i) => i)
+                .distance(260)
+                .strength(0.032))
+            .force('charge', d3.forceManyBody()
+                .strength(d => d._isReport ? -600 : -2800)
+                .distanceMax(700))
+            .force('center', d3.forceCenter(0, 0).strength(0.05))
+            .force('collide', d3.forceCollide()
+                .radius(d => (d.expanded ? d.radius + 200 : d.radius) + 28)
+                .strength(0.8)
+                .iterations(2))
+            .force('radial', d3.forceRadial(
+                d => d._isReport ? 380 : 220, 0, 0
+            ).strength(0.04))
+            .alphaDecay(0.026)
+            .velocityDecay(0.4)
+            .on('tick', () => this._updateDOM());
+
+        // One-way report attraction (custom force — doesn't push tables)
+        this._simulation.force('reportAttr', () => {
+            if (!this._showReports) return;
+            nodes.forEach(rn => {
+                if (!rn._isReport || !this._nodeActive(rn)) return;
+                let cx = 0, cy = 0, cnt = 0;
+                edges.forEach(e => {
+                    if (!e._isReportEdge) return;
+                    const other = e.from === rn._idx ? nodes[e.to]
+                                : e.to   === rn._idx ? nodes[e.from] : null;
+                    if (other && this._nodeActive(other)) { cx += other.x; cy += other.y; cnt++; }
+                });
+                if (cnt > 0) { rn.vx += 0.01 * (cx / cnt - rn.x); rn.vy += 0.01 * (cy / cnt - rn.y); }
+            });
+        });
+    }
+
+    _reheatSimulation(alpha = 0.3) {
+        if (!this._simulation) return;
+        // Update collide radius in case expansion state changed
+        this._simulation.force('collide')
+            .radius(d => (d.expanded ? d.radius + 200 : d.radius) + 28);
+        this._simulation.alphaTarget(alpha).restart();
+        setTimeout(() => { if (this._simulation) this._simulation.alphaTarget(0); }, 1400);
+    }
+
+    _applyRootTransform() {
+        if (!this._root) return;
+        this._root.setAttribute('transform',
+            `translate(${this._W / 2 + this._tx},${this._H / 2 + this._ty}) scale(${this._scale})`);
     }
 
     // ─── Graph data ──────────────────────────────────────────────────────────
@@ -164,10 +199,8 @@ class OntologyRenderer {
             return {
                 id: t.name, name: t.name, table: t,
                 typeKey, ...s, radius,
-                cols, hiddenCols, measures,
-                initials,
-                expanded: false,
-                satellites: [],      // built lazily on first expand
+                cols, hiddenCols, measures, initials,
+                expanded: false, satellites: [],
                 x: 0, y: 0, vx: 0, vy: 0,
                 _pinned: false, _grp: null, _circle: null, _selected: false,
                 _hideNode: typeKey === 'hidden'
@@ -191,7 +224,6 @@ class OntologyRenderer {
         // ── Report usage ──────────────────────────────────────────────────────
         const fum = this.visualData?.fieldUsageMap;
 
-        // Mark each table node with _usedInReports
         nodes.forEach(n => {
             n._usedInReports = false;
             if (fum) {
@@ -201,7 +233,6 @@ class OntologyRenderer {
             }
         });
 
-        // Store which specific measures/columns are used (for satellite highlighting)
         this._reportUsedSet = new Set();
         if (fum) {
             for (const key of Object.keys(fum)) {
@@ -212,13 +243,11 @@ class OntologyRenderer {
             }
         }
 
-        // Add a node per report page (hidden by default; toggled via legend button)
         const MAX_RPT = 30;
         if (this.visualData?.pages) {
             this.visualData.pages.slice(0, MAX_RPT).forEach((page, pi) => {
-                // Collect per-field edges: "tName|fieldName" deduped per page
-                const tablesInPage  = new Set();
-                const fieldsInPage  = new Set(); // "tName|fieldName"
+                const tablesInPage = new Set();
+                const fieldsInPage = new Set();
                 (page.visuals || []).forEach(v => {
                     (v.fields || []).forEach(f => {
                         const t = f.table || f.entity;
@@ -251,17 +280,13 @@ class OntologyRenderer {
                 });
 
                 if (fieldsInPage.size > 0) {
-                    // Per-field edges — aim at satellite when table is expanded
                     fieldsInPage.forEach(key => {
                         const pipe = key.indexOf('|');
-                        const tName     = key.slice(0, pipe);
-                        const fieldName = key.slice(pipe + 1);
-                        edges.push({ from: rNodeIdx, to: idx[tName],
+                        edges.push({ from: rNodeIdx, to: idx[key.slice(0, pipe)],
                             rel: null, card: '', _path: null, _label: null,
-                            _isReportEdge: true, _reportField: fieldName });
+                            _isReportEdge: true, _reportField: key.slice(pipe + 1) });
                     });
                 } else {
-                    // Fallback: table-level edges (no field info available)
                     tablesInPage.forEach(tName => {
                         edges.push({ from: rNodeIdx, to: idx[tName],
                             rel: null, card: '', _path: null, _label: null,
@@ -274,50 +299,45 @@ class OntologyRenderer {
         return { nodes, edges };
     }
 
-    // Build satellite descriptors for a table node (called once, lazily)
+    // Build satellite descriptors for a table node (lazily on first expand)
     _buildSatellites(node) {
         const sats    = [];
-        const INNER_R = node.radius + 72;   // columns — longer spokes, more breathing room
-        const OUTER_R = node.radius + 152; // measures — wide gap between rings for arc edges
+        const INNER_R = node.radius + 72;
+        const OUTER_R = node.radius + 152;
 
-        // Columns — key columns first, then alphabetical
         const cols = [...node.cols].sort((a, b) => {
             if (a.isKey && !b.isKey) return -1;
             if (!a.isKey && b.isKey) return 1;
             return a.name.localeCompare(b.name);
         });
-        const showCols  = cols;
-        const totalColSlots = showCols.length;
+        const totalColSlots = cols.length;
 
-        // Build column index map for barycenter computation
         const colIdx = new Map();
-        showCols.forEach((c, i) => colIdx.set(c.name, i));
+        cols.forEach((c, i) => colIdx.set(c.name, i));
 
-        showCols.forEach((c, i) => {
+        cols.forEach((c, i) => {
             sats.push({
                 type: 'column', name: c.name, col: c,
-                color: this._colTypeColor(c.dataType),
-                radius: 11,
+                color: this._colTypeColor(c.dataType), radius: 11,
                 orbitR: INNER_R,
-                angle:  (2 * Math.PI * i / Math.max(totalColSlots, 1)) - Math.PI / 2,
+                angle: (2 * Math.PI * i / Math.max(totalColSlots, 1)) - Math.PI / 2,
                 x: node.x, y: node.y, _grp: null, _spoke: null
             });
         });
-        // Measures in outer ring — sorted by barycenter to minimise arc crossings
+
         const showMsrs = node.measures.slice();
         showMsrs.sort((a, b) =>
-            this._msrBarycenter(a, node.name, colIdx, showCols.length) -
-            this._msrBarycenter(b, node.name, colIdx, showCols.length)
+            this._msrBarycenter(a, node.name, colIdx, cols.length) -
+            this._msrBarycenter(b, node.name, colIdx, cols.length)
         );
         const totalMsrSlots = showMsrs.length;
 
         showMsrs.forEach((m, i) => {
             sats.push({
                 type: 'measure', name: m.name, measure: m,
-                color: '#7c3aed',
-                radius: 19,
+                color: '#7c3aed', radius: 19,
                 orbitR: OUTER_R,
-                angle:  (2 * Math.PI * i / Math.max(totalMsrSlots, 1)) - Math.PI / 2,
+                angle: (2 * Math.PI * i / Math.max(totalMsrSlots, 1)) - Math.PI / 2,
                 x: node.x, y: node.y, _grp: null, _spoke: null,
                 colRefs: this._parseDaxColumnRefs(m.expression || '', node.name)
             });
@@ -327,29 +347,22 @@ class OntologyRenderer {
     }
 
     _parseDaxColumnRefs(expr, defaultTable) {
-        const refs = [];
-        const seen = new Set();
-        // Match explicit Table[Column] references
+        const refs = []; const seen = new Set();
         const re = /(\w[\w\s]*?)\s*\[([^\]]+)\]/g;
         let m;
         while ((m = re.exec(expr)) !== null) {
-            const tableName = m[1].trim();
-            const colName   = m[2].trim();
-            const key = `${tableName}::${colName}`;
-            if (!seen.has(key)) { seen.add(key); refs.push({ tableName, colName }); }
+            const key = `${m[1].trim()}::${m[2].trim()}`;
+            if (!seen.has(key)) { seen.add(key); refs.push({ tableName: m[1].trim(), colName: m[2].trim() }); }
         }
-        // Match standalone [Column] (same table, after removing the above)
         const stripped = expr.replace(/\w[\w\s]*?\s*\[[^\]]+\]/g, '');
         const re2 = /\[([^\]]+)\]/g;
         while ((m = re2.exec(stripped)) !== null) {
-            const colName = m[1].trim();
-            const key = `${defaultTable}::${colName}`;
-            if (!seen.has(key)) { seen.add(key); refs.push({ tableName: defaultTable, colName }); }
+            const key = `${defaultTable}::${m[1].trim()}`;
+            if (!seen.has(key)) { seen.add(key); refs.push({ tableName: defaultTable, colName: m[1].trim() }); }
         }
         return refs;
     }
 
-    // Barycenter of a measure's same-table column refs (for crossing minimization)
     _msrBarycenter(measure, tableName, colIdx, numCols) {
         if (!measure.expression) return numCols;
         const refs = this._parseDaxColumnRefs(measure.expression, tableName)
@@ -360,10 +373,10 @@ class OntologyRenderer {
 
     _colTypeColor(dt) {
         const t = (dt || '').toLowerCase();
-        if (['int64','int32','integer','double','decimal','currency','single'].includes(t)) return '#16a34a'; // green
-        if (['string','text'].includes(t)) return '#0891b2';                                                 // cyan — distinct from entity blue
-        if (['datetime','date','time'].includes(t)) return '#e11d48';                                        // rose-red — distinct from calc group orange
-        if (['boolean'].includes(t)) return '#f59e0b';                                                       // amber — distinct from all above
+        if (['int64','int32','integer','double','decimal','currency','single'].includes(t)) return '#16a34a';
+        if (['string','text'].includes(t))    return '#0891b2';
+        if (['datetime','date','time'].includes(t)) return '#e11d48';
+        if (['boolean'].includes(t))          return '#f59e0b';
         return '#94a3b8';
     }
 
@@ -374,40 +387,30 @@ class OntologyRenderer {
         node.expanded = !node.expanded;
 
         if (node.expanded) {
-            if (node.satellites.length === 0) {
-                node.satellites = this._buildSatellites(node);
-            }
+            if (node.satellites.length === 0) node.satellites = this._buildSatellites(node);
             node.satellites.forEach(sat => {
                 const vis = this._satVisible(node, sat);
                 if (!sat._grp) {
                     this._createSatelliteElement(sat, node, container);
-                    if (!vis) {
-                        sat._grp.style.display = 'none';
-                        if (sat._spoke) sat._spoke.style.display = 'none';
-                    }
+                    if (!vis) { sat._grp.style.display = 'none'; if (sat._spoke) sat._spoke.style.display = 'none'; }
                 } else {
                     sat._grp.style.display  = vis ? '' : 'none';
                     if (sat._spoke) sat._spoke.style.display = vis ? '' : 'none';
                 }
             });
-            this._alpha = Math.max(this._alpha, 0.35); // re-energize so neighbours make room
+            this._reheatSimulation(0.35);
         } else {
             node.satellites.forEach(sat => {
-                if (sat._grp)  sat._grp.style.display  = 'none';
+                if (sat._grp)   sat._grp.style.display   = 'none';
                 if (sat._spoke) sat._spoke.style.display = 'none';
             });
         }
 
-        // Update expand-dot indicator
-        if (node._expandDot) {
-            node._expandDot.setAttribute('fill', node.expanded ? node.color : 'white');
-        }
+        if (node._expandDot) node._expandDot.setAttribute('fill', node.expanded ? node.color : 'white');
     }
 
     _createSatelliteElement(sat, parentNode, container) {
-        const R = sat.radius;
-
-        // Spoke (dashed line from parent to satellite) — columns only; measures connect via arc edges
+        // Spoke — columns only; measures connect via arc edges
         let spoke = null;
         if (sat.type !== 'measure') {
             spoke = this._mkSVG('line', {
@@ -418,77 +421,42 @@ class OntologyRenderer {
         }
         sat._spoke = spoke;
 
+        const R   = sat.radius;
         const grp = this._mkSVG('g');
         grp.classList.add('ont-sat-grp');
-        grp.style.cursor = sat.type.startsWith('more') ? 'default' : 'pointer';
+        grp.style.cursor     = 'pointer';
+        grp.style.transition = 'opacity 0.2s ease';
 
         if (sat.type === 'column') {
-            const circle = this._mkSVG('circle', {
-                r: R, fill: sat.color, opacity: '0.88',
-                stroke: 'white', 'stroke-width': '1.5'
-            });
-            // Hover tooltip
-            const title = this._mkSVG('title');
+            const circle = this._mkSVG('circle', { r: R, fill: sat.color, opacity: '0.88', stroke: 'white', 'stroke-width': '1.5' });
+            const title  = this._mkSVG('title');
             title.textContent = `${sat.name}  (${sat.col.dataType || '?'})`;
-            grp.appendChild(circle);
-            grp.appendChild(title);
+            grp.appendChild(circle); grp.appendChild(title);
 
         } else if (sat.type === 'measure') {
             const gid  = `sat-g-${Math.random().toString(36).slice(2)}`;
             const grad = this._mkSVG('radialGradient', { id: gid, cx: '38%', cy: '32%', r: '68%' });
-            const s1   = this._mkSVG('stop', { offset: '0%' });
-            s1.setAttribute('stop-color', '#c4b5fd');
-            const s2 = this._mkSVG('stop', { offset: '100%' });
-            s2.setAttribute('stop-color', '#5b21b6');
+            const s1   = this._mkSVG('stop', { offset: '0%' });   s1.setAttribute('stop-color', '#c4b5fd');
+            const s2   = this._mkSVG('stop', { offset: '100%' }); s2.setAttribute('stop-color', '#5b21b6');
             grad.appendChild(s1); grad.appendChild(s2);
             this._defs.appendChild(grad);
 
-            const circle = this._mkSVG('circle', {
-                r: R, fill: `url(#${gid})`,
-                stroke: '#7c3aed', 'stroke-width': '1.5'
-            });
-            const sym = this._mkSVG('text', {
-                'text-anchor': 'middle', 'dominant-baseline': 'central',
-                'font-size': '11', fill: 'white',
-                'pointer-events': 'none', 'font-weight': '700'
-            });
+            const circle = this._mkSVG('circle', { r: R, fill: `url(#${gid})`, stroke: '#7c3aed', 'stroke-width': '1.5' });
+            const sym    = this._mkSVG('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': '11', fill: 'white', 'pointer-events': 'none', 'font-weight': '700' });
             sym.textContent = 'Σ';
-            grp.appendChild(circle);
-            grp.appendChild(sym);
-
-            // Name label below measure node
-            const lbl = this._mkSVG('text', {
-                'text-anchor': 'middle', 'dominant-baseline': 'hanging',
-                'font-size': '9', 'font-weight': '500',
-                fill: 'var(--text, #1e293b)',
-                'pointer-events': 'none', y: R + 4
-            });
+            const lbl = this._mkSVG('text', { 'text-anchor': 'middle', 'dominant-baseline': 'hanging', 'font-size': '9', 'font-weight': '500', fill: 'var(--text, #1e293b)', 'pointer-events': 'none', y: R + 4 });
             lbl.textContent = sat.name.length > 14 ? sat.name.slice(0, 12) + '…' : sat.name;
-            grp.appendChild(lbl);
+            grp.appendChild(circle); grp.appendChild(sym); grp.appendChild(lbl);
 
         } else {
-            // "+N more" placeholder
-            const circle = this._mkSVG('circle', {
-                r: R, fill: 'var(--surface,#fff)',
-                stroke: sat.color, 'stroke-width': '1.5',
-                'stroke-dasharray': '3,2', opacity: '0.8'
-            });
-            const txt = this._mkSVG('text', {
-                'text-anchor': 'middle', 'dominant-baseline': 'central',
-                'font-size': '8', fill: '#64748b',
-                'pointer-events': 'none', 'font-weight': '700'
-            });
+            const circle = this._mkSVG('circle', { r: R, fill: 'var(--surface,#fff)', stroke: sat.color, 'stroke-width': '1.5', 'stroke-dasharray': '3,2', opacity: '0.8' });
+            const txt    = this._mkSVG('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': '8', fill: '#64748b', 'pointer-events': 'none', 'font-weight': '700' });
             txt.textContent = sat.name;
-            grp.appendChild(circle);
-            grp.appendChild(txt);
+            grp.appendChild(circle); grp.appendChild(txt);
         }
 
-        // Click → detail panel
         if (!sat.type.startsWith('more')) {
-            grp.addEventListener('click', e => {
-                e.stopPropagation();
-                this._selectSatellite(parentNode, sat, container);
-            });
+            grp.addEventListener('click', e => { e.stopPropagation(); this._selectSatellite(parentNode, sat, container); });
         }
 
         this._satLayer.appendChild(grp);
@@ -501,10 +469,7 @@ class OntologyRenderer {
         const defs = this._mkSVG('defs');
         this._defs = defs;
 
-        const mk = this._mkSVG('marker', {
-            id: 'ont-arrow', markerWidth: '10', markerHeight: '7',
-            refX: '9', refY: '3.5', orient: 'auto'
-        });
+        const mk = this._mkSVG('marker', { id: 'ont-arrow', markerWidth: '10', markerHeight: '7', refX: '9', refY: '3.5', orient: 'auto' });
         mk.appendChild(this._mkSVG('polygon', { points: '0 0,10 3.5,0 7', fill: '#94a3b8' }));
         defs.appendChild(mk);
 
@@ -529,40 +494,27 @@ class OntologyRenderer {
 
             const gid  = `ont-grad-${i}`;
             const grad = this._mkSVG('radialGradient', { id: gid, cx: '38%', cy: '32%', r: '68%' });
-            const s1   = this._mkSVG('stop', { offset: '0%' });
-            s1.setAttribute('stop-color', node.light);
-            const s2 = this._mkSVG('stop', { offset: '100%' });
-            s2.setAttribute('stop-color', node.dark);
+            const s1 = this._mkSVG('stop', { offset: '0%' });   s1.setAttribute('stop-color', node.light);
+            const s2 = this._mkSVG('stop', { offset: '100%' }); s2.setAttribute('stop-color', node.dark);
             grad.appendChild(s1); grad.appendChild(s2);
             this._defs.appendChild(grad);
 
             const grp = this._mkSVG('g');
             grp.classList.add('ont-node-grp');
-            grp.dataset.nodeIdx = String(i);
-            grp.style.cursor = 'pointer';
+            grp.dataset.nodeIdx  = String(i);
+            grp.style.cursor     = 'pointer';
+            grp.style.transition = 'opacity 0.25s ease';
 
-            const glowRing = this._mkSVG('circle', {
-                r: R + 9, fill: 'none', stroke: node.color,
-                'stroke-width': '1.5', opacity: '0.15'
-            });
-            const shadow = this._mkSVG('circle', { r: R + 2, cx: 2, cy: 4 });
+            const glowRing = this._mkSVG('circle', { r: R + 9, fill: 'none', stroke: node.color, 'stroke-width': '1.5', opacity: '0.15' });
+            const shadow   = this._mkSVG('circle', { r: R + 2, cx: 2, cy: 4 });
             shadow.setAttribute('fill', 'rgba(0,0,0,0.18)');
             shadow.setAttribute('filter', 'url(#ont-shadow)');
-
-            const circle = this._mkSVG('circle', {
-                r: R, fill: `url(#${gid})`,
-                stroke: node.color, 'stroke-width': '2.5'
-            });
+            const circle = this._mkSVG('circle', { r: R, fill: `url(#${gid})`, stroke: node.color, 'stroke-width': '2.5' });
             node._circle = circle;
 
-            // Expand dot (tables only — report pages don't expand)
             if (!node._isReport) {
-                const expandDot = this._mkSVG('circle', {
-                    r: '5', cy: R - 2,
-                    fill: 'white', stroke: node.color, 'stroke-width': '1.2', opacity: '0.8'
-                });
+                const expandDot = this._mkSVG('circle', { r: '5', cy: R - 2, fill: 'white', stroke: node.color, 'stroke-width': '1.2', opacity: '0.8' });
                 node._expandDot = expandDot;
-                // appended in correct z-order below
             }
 
             const initText = this._mkSVG('text', {
@@ -575,22 +527,11 @@ class OntologyRenderer {
             initText.textContent = node.initials;
 
             if (node._isReport) {
-                // Show visual count inside report node
-                const vcText = this._mkSVG('text', {
-                    'text-anchor': 'middle', 'dominant-baseline': 'central',
-                    'font-size': '8', fill: 'rgba(255,255,255,0.65)',
-                    'pointer-events': 'none', 'font-family': 'Consolas,monospace',
-                    y: R * 0.46
-                });
+                const vcText = this._mkSVG('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': '8', fill: 'rgba(255,255,255,0.65)', 'pointer-events': 'none', 'font-family': 'Consolas,monospace', y: R * 0.46 });
                 vcText.textContent = `${node._visualCount || 0}v`;
                 grp.appendChild(vcText);
             } else if (node.measures.length > 0) {
-                const mcText = this._mkSVG('text', {
-                    'text-anchor': 'middle', 'dominant-baseline': 'central',
-                    'font-size': '9', fill: 'rgba(255,255,255,0.7)',
-                    'pointer-events': 'none', 'font-family': 'Consolas,monospace',
-                    y: R * 0.44
-                });
+                const mcText = this._mkSVG('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': '9', fill: 'rgba(255,255,255,0.7)', 'pointer-events': 'none', 'font-family': 'Consolas,monospace', y: R * 0.44 });
                 mcText.textContent = `Σ ${node.measures.length}`;
                 grp.appendChild(mcText);
             }
@@ -599,18 +540,13 @@ class OntologyRenderer {
                 'text-anchor': 'middle', 'dominant-baseline': 'hanging',
                 'font-size': '12', 'font-weight': '600',
                 fill: 'var(--text, #1e293b)', 'pointer-events': 'none',
-                'font-family': 'system-ui,-apple-system,sans-serif',
-                y: R + 8
+                'font-family': 'system-ui,-apple-system,sans-serif', y: R + 8
             });
             label.textContent = node.name.length > 22 ? node.name.slice(0, 20) + '…' : node.name;
 
             const BADGES = { fieldparam: 'FIELD PARAM', calcgroup: 'CALC GROUP', hidden: 'HIDDEN', report: 'PAGE' };
             if (BADGES[node.typeKey]) {
-                const badge = this._mkSVG('text', {
-                    'text-anchor': 'middle', 'dominant-baseline': 'hanging',
-                    'font-size': '9', 'font-weight': '700',
-                    fill: node.color, 'pointer-events': 'none', y: R + 23
-                });
+                const badge = this._mkSVG('text', { 'text-anchor': 'middle', 'dominant-baseline': 'hanging', 'font-size': '9', 'font-weight': '700', fill: node.color, 'pointer-events': 'none', y: R + 23 });
                 badge.textContent = BADGES[node.typeKey];
                 grp.appendChild(badge);
             }
@@ -622,17 +558,14 @@ class OntologyRenderer {
             grp.appendChild(initText);
             grp.appendChild(label);
 
+            // Hover: highlight connected neighbourhood
             grp.addEventListener('mouseenter', () => {
-                if (!node._selected) {
-                    circle.setAttribute('stroke-width', '4');
-                    glowRing.setAttribute('opacity', '0.35');
-                }
+                if (!node._selected) { circle.setAttribute('stroke-width', '4'); glowRing.setAttribute('opacity', '0.35'); }
+                this._setHighlight(i);
             });
             grp.addEventListener('mouseleave', () => {
-                if (!node._selected) {
-                    circle.setAttribute('stroke-width', '2.5');
-                    glowRing.setAttribute('opacity', '0.15');
-                }
+                if (!node._selected) { circle.setAttribute('stroke-width', '2.5'); glowRing.setAttribute('opacity', '0.15'); }
+                this._clearHighlight();
             });
 
             grp.addEventListener('click', e => {
@@ -641,13 +574,15 @@ class OntologyRenderer {
                 this._selectNode(i, container);
             });
 
+            // Drag via D3 fx/fy pinning
             grp.addEventListener('mousedown', e => {
                 if (e.button !== 0) return;
                 e.stopPropagation();
                 e.preventDefault();
                 this._dragging = { idx: i, node };
-                node._pinned = true;
-                if (this._svg) this._svg.style.cursor = 'grabbing';
+                node.fx = node.x; node.fy = node.y;
+                if (this._simulation) this._simulation.alphaTarget(0.3).restart();
+                if (this._svgEl) this._svgEl.style.cursor = 'grabbing';
             });
 
             nodeLayer.appendChild(grp);
@@ -660,427 +595,21 @@ class OntologyRenderer {
             const grp = this._mkSVG('g');
             let path;
             if (edge._isReportEdge) {
-                path = this._mkSVG('path', {
-                    fill: 'none', stroke: '#0ea5e9',
-                    'stroke-width': '1', opacity: '0.28',
-                    'stroke-dasharray': '5,4'
-                });
+                path = this._mkSVG('path', { fill: 'none', stroke: '#0ea5e9', 'stroke-width': '1', opacity: '0.28', 'stroke-dasharray': '5,4' });
             } else {
-                path = this._mkSVG('path', {
-                    fill: 'none', stroke: '#94a3b8',
-                    'stroke-width': '1.5', opacity: '0.55',
-                    'marker-end': 'url(#ont-arrow)'
-                });
+                path = this._mkSVG('path', { fill: 'none', stroke: '#94a3b8', 'stroke-width': '1.5', opacity: '0.55', 'marker-end': 'url(#ont-arrow)' });
             }
             grp.appendChild(path);
             edge._path = path;
 
             if (!edge._isReportEdge) {
-                const lbl = this._mkSVG('text', {
-                    'font-size': '10', fill: '#94a3b8',
-                    'text-anchor': 'middle', 'dominant-baseline': 'middle',
-                    'pointer-events': 'none', 'font-family': 'system-ui,sans-serif'
-                });
+                const lbl = this._mkSVG('text', { 'font-size': '10', fill: '#94a3b8', 'text-anchor': 'middle', 'dominant-baseline': 'middle', 'pointer-events': 'none', 'font-family': 'system-ui,sans-serif' });
                 lbl.textContent = edge.card;
                 grp.appendChild(lbl);
                 edge._label = lbl;
             }
             edgeLayer.appendChild(grp);
         });
-    }
-
-    // ─── Physics simulation ──────────────────────────────────────────────────
-
-    _applyRootTransform() {
-        if (!this._root) return;
-        this._root.setAttribute('transform',
-            `translate(${this._W / 2 + this._tx},${this._H / 2 + this._ty}) scale(${this._scale})`
-        );
-    }
-
-    _tick() {
-        if (!this._running) return;
-
-        if (this._alpha > 0.003) {
-            this._alpha *= 0.974;
-
-            const REPK    = 11000;
-            const SPRINGK = 0.032;
-            const REST    = 260;
-            const DAMP    = 0.80;
-            const CENK    = 0.007;
-            const nodes   = this._nodes;
-            const edges   = this._edges;
-
-            nodes.forEach(n => { n._fx = 0; n._fy = 0; });
-
-            for (let i = 0; i < nodes.length; i++) {
-                if (!this._nodeActive(nodes[i])) continue;
-                for (let j = i + 1; j < nodes.length; j++) {
-                    if (!this._nodeActive(nodes[j])) continue;
-                    const a = nodes[i], b = nodes[j];
-                    const ra = a.expanded ? a.radius + 188 : a.radius;
-                    const rb = b.expanded ? b.radius + 188 : b.radius;
-                    const dx = b.x - a.x, dy = b.y - a.y;
-                    const d2 = dx * dx + dy * dy + 1;
-                    const d  = Math.sqrt(d2);
-                    const f  = d < ra + rb + 30 ? (REPK * 2.5) / d2 : REPK / d2;
-                    const fx = f * dx / d, fy = f * dy / d;
-                    a._fx -= fx; a._fy -= fy;
-                    b._fx += fx; b._fy += fy;
-                }
-            }
-
-            edges.forEach(e => {
-                if (e._isReportEdge) return; // handled separately below
-                const a = nodes[e.from], b = nodes[e.to];
-                if (!this._nodeActive(a) || !this._nodeActive(b)) return;
-                const dx = b.x - a.x, dy = b.y - a.y;
-                const d  = Math.sqrt(dx * dx + dy * dy) + 0.01;
-                const f  = SPRINGK * (d - REST);
-                const fx = f * dx / d, fy = f * dy / d;
-                a._fx += fx; a._fy += fy;
-                b._fx -= fx; b._fy -= fy;
-            });
-
-            // Report nodes: pull toward centroid of connected tables (one-way, won't distort tables)
-            if (this._showReports) {
-                nodes.forEach(rn => {
-                    if (!rn._isReport) return;
-                    let cx = 0, cy = 0, cnt = 0;
-                    edges.forEach(e => {
-                        if (!e._isReportEdge) return;
-                        const other = e.from === rn._idx ? nodes[e.to]
-                                    : e.to   === rn._idx ? nodes[e.from] : null;
-                        if (other && this._nodeActive(other)) { cx += other.x; cy += other.y; cnt++; }
-                    });
-                    if (cnt > 0) {
-                        const RATT = 0.01;
-                        rn._fx += RATT * (cx / cnt - rn.x);
-                        rn._fy += RATT * (cy / cnt - rn.y);
-                    }
-                });
-            }
-
-            nodes.forEach(n => {
-                if (!this._nodeActive(n)) return;
-                n._fx -= CENK * n.x; n._fy -= CENK * n.y;
-            });
-
-            nodes.forEach(n => {
-                if (n._pinned) return;
-                if (!this._nodeActive(n)) return;
-                n.vx = (n.vx + n._fx) * DAMP;
-                n.vy = (n.vy + n._fy) * DAMP;
-                n.x += n.vx;
-                n.y += n.vy;
-            });
-        }
-
-        this._updateDOM();
-        this._animFrame = requestAnimationFrame(() => this._tick());
-    }
-
-    _updateDOM() {
-        this._nodes.forEach(node => {
-            if (!this._nodeActive(node)) return;
-            if (node._grp) {
-                node._grp.setAttribute('transform',
-                    `translate(${node.x.toFixed(1)},${node.y.toFixed(1)})`);
-            }
-
-            // Satellites orbit their parent
-            if (node.expanded) {
-                node.satellites.forEach(sat => {
-                    if (!sat._grp) return;
-                    const sx = node.x + Math.cos(sat.angle) * sat.orbitR;
-                    const sy = node.y + Math.sin(sat.angle) * sat.orbitR;
-                    sat.x = sx; sat.y = sy;
-                    sat._grp.setAttribute('transform', `translate(${sx.toFixed(1)},${sy.toFixed(1)})`);
-
-                    if (sat._spoke) {
-                        const dx = sx - node.x, dy = sy - node.y;
-                        const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
-                        sat._spoke.setAttribute('x1', (node.x + dx / d * (node.radius + 3)).toFixed(1));
-                        sat._spoke.setAttribute('y1', (node.y + dy / d * (node.radius + 3)).toFixed(1));
-                        sat._spoke.setAttribute('x2', (sx   - dx / d * sat.radius).toFixed(1));
-                        sat._spoke.setAttribute('y2', (sy   - dy / d * sat.radius).toFixed(1));
-                    }
-                });
-            }
-        });
-
-        this._updateColEdges();
-
-        this._edges.forEach(edge => {
-            if (!edge._path) return;
-            const a  = this._nodes[edge.from];
-            const b  = this._nodes[edge.to];
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
-            if (edge._isReportEdge) {
-                // When field is known and table is expanded, aim at the satellite
-                let tx = b.x, ty = b.y, endR = b.radius + 5;
-                if (edge._reportField && b.expanded) {
-                    const sat = b.satellites.find(s =>
-                        s.name === edge._reportField && s._grp &&
-                        s._grp.style.display !== 'none');
-                    if (sat) { tx = sat.x; ty = sat.y; endR = sat.radius + 3; }
-                }
-                const ddx = tx - a.x, ddy = ty - a.y;
-                const dd  = Math.sqrt(ddx * ddx + ddy * ddy) + 0.001;
-                const sx = a.x + ddx / dd * (a.radius + 3);
-                const sy = a.y + ddy / dd * (a.radius + 3);
-                const ex = tx  - ddx / dd * endR;
-                const ey = ty  - ddy / dd * endR;
-                const cx = (sx + ex) / 2 - (ddy / dd) * 12;
-                const cy = (sy + ey) / 2 + (ddx / dd) * 12;
-                edge._path.setAttribute('d',
-                    `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
-                return;
-            }
-            const sx = a.x + dx / d * (a.radius + 4);
-            const sy = a.y + dy / d * (a.radius + 4);
-            const ex = b.x - dx / d * (b.radius + 14);
-            const ey = b.y - dy / d * (b.radius + 14);
-            const cx = (sx + ex) / 2 - (dy / d) * 28;
-            const cy = (sy + ey) / 2 + (dx / d) * 28;
-            edge._path.setAttribute('d',
-                `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`
-            );
-            if (edge._label) {
-                edge._label.setAttribute('x', cx.toFixed(1));
-                edge._label.setAttribute('y', (cy - 9).toFixed(1));
-            }
-        });
-    }
-
-    // Draw arc edges from each visible column to all measure satellites that reference it.
-    // All arcs are constrained to the annular zone between the two orbit rings — they
-    // never cross inward past the column ring or outward past the measure ring.
-    _updateColEdges() {
-        if (!this._colEdgesLayer || !this._colEdgeMap) return;
-
-        // Build lookup: "tableName::colName" → colSat
-        const colLookup = new Map();
-        this._nodes.forEach(node => {
-            if (!node.expanded) return;
-            node.satellites.forEach(sat => {
-                if (sat.type === 'column' && sat._grp && sat._grp.style.display !== 'none') {
-                    colLookup.set(`${node.name}::${sat.name}`, sat);
-                }
-            });
-        });
-
-        // Build per-column measure list, storing the parent node for arc geometry
-        const colToMsrs = new Map(); // colKey → { msrList, node }
-        this._nodes.forEach(node => {
-            if (!node.expanded) return;
-            node.satellites.forEach(mSat => {
-                if (mSat.type !== 'measure' || !mSat.colRefs) return;
-                mSat.colRefs.forEach(ref => {
-                    if (ref.tableName !== node.name) return; // intra-table only
-                    const colKey = `${ref.tableName}::${ref.colName}`;
-                    if (!colLookup.has(colKey)) return;
-                    if (!colToMsrs.has(colKey)) colToMsrs.set(colKey, { msrList: [], node });
-                    colToMsrs.get(colKey).msrList.push(mSat);
-                });
-            });
-        });
-
-        const active = new Set(colToMsrs.keys());
-
-        // Midpoint angle along the shorter arc between two angles
-        const shortMid = (a, b) => {
-            let d = b - a;
-            if (d >  Math.PI) d -= 2 * Math.PI;
-            if (d < -Math.PI) d += 2 * Math.PI;
-            return a + d * 0.5;
-        };
-
-        // Point on a node circle's edge in the direction of target (tx, ty)
-        const ep = (nx, ny, tx, ty, r) => {
-            const dx = tx - nx, dy = ty - ny;
-            const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
-            return [nx + dx / d * r, ny + dy / d * r];
-        };
-
-        colToMsrs.forEach(({ msrList, node: pNode }, colKey) => {
-            const colSat = colLookup.get(colKey);
-            if (!colSat) return;
-
-            let path = this._colEdgeMap.get(colKey);
-            if (!path) {
-                path = this._mkSVG('path', {
-                    fill: 'none', stroke: '#a78bfa', 'stroke-width': '1.4',
-                    'stroke-dasharray': '4,3', opacity: '0.7',
-                    'pointer-events': 'none'
-                });
-                this._colEdgesLayer.appendChild(path);
-                this._colEdgeMap.set(colKey, path);
-            }
-            path.style.display = '';
-
-            const innerR   = colSat.orbitR;
-            const outerR   = msrList[0].orbitR;
-            const gap      = outerR - innerR;
-            const colAngle = Math.atan2(colSat.y - pNode.y, colSat.x - pNode.x);
-
-            if (msrList.length === 1) {
-                // Single measure: quadratic bezier, control point at 70% of gap along
-                // the short-arc mid-angle. Curve stays entirely in the annular zone.
-                const mSat     = msrList[0];
-                const msrAngle = Math.atan2(mSat.y - pNode.y, mSat.x - pNode.x);
-                const ma       = shortMid(colAngle, msrAngle);
-                const cpR      = innerR + gap * 0.70;
-                const cpx      = pNode.x + Math.cos(ma) * cpR;
-                const cpy      = pNode.y + Math.sin(ma) * cpR;
-                const [x1, y1] = ep(colSat.x, colSat.y, cpx, cpy, colSat.radius);
-                const [x2, y2] = ep(mSat.x,   mSat.y,   cpx, cpy, mSat.radius);
-                path.setAttribute('d',
-                    `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cpx.toFixed(1)},${cpy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`);
-
-            } else {
-                // Multiple measures: arc trunk from column to a junction in the gap,
-                // then arc branches from junction to each measure.
-
-                // Junction at gap midpoint, in the average direction of all measures
-                let avgDx = 0, avgDy = 0;
-                msrList.forEach(m => { avgDx += m.x - pNode.x; avgDy += m.y - pNode.y; });
-                avgDx /= msrList.length; avgDy /= msrList.length;
-                const avgD   = Math.sqrt(avgDx * avgDx + avgDy * avgDy) + 0.001;
-                const jAngle = Math.atan2(avgDy, avgDx);
-                const jR     = innerR + gap * 0.48;
-                const jx     = pNode.x + Math.cos(jAngle) * jR;
-                const jy     = pNode.y + Math.sin(jAngle) * jR;
-
-                // Trunk: colSat → junction; control at 28% of gap, mid-angle
-                const ma_t   = shortMid(colAngle, jAngle);
-                const tcpR   = innerR + gap * 0.28;
-                const tcpx   = pNode.x + Math.cos(ma_t) * tcpR;
-                const tcpy   = pNode.y + Math.sin(ma_t) * tcpR;
-                const [tx1, ty1] = ep(colSat.x, colSat.y, tcpx, tcpy, colSat.radius);
-                let d = `M${tx1.toFixed(1)},${ty1.toFixed(1)} Q${tcpx.toFixed(1)},${tcpy.toFixed(1)} ${jx.toFixed(1)},${jy.toFixed(1)}`;
-
-                // Branches: junction → each measure; control at 78% of gap, mid-angle
-                msrList.forEach(mSat => {
-                    const msrAngle  = Math.atan2(mSat.y - pNode.y, mSat.x - pNode.x);
-                    const ma_b      = shortMid(jAngle, msrAngle);
-                    const bcpR      = innerR + gap * 0.78;
-                    const bcpx      = pNode.x + Math.cos(ma_b) * bcpR;
-                    const bcpy      = pNode.y + Math.sin(ma_b) * bcpR;
-                    const [bx2, by2] = ep(mSat.x, mSat.y, bcpx, bcpy, mSat.radius);
-                    d += ` M${jx.toFixed(1)},${jy.toFixed(1)} Q${bcpx.toFixed(1)},${bcpy.toFixed(1)} ${bx2.toFixed(1)},${by2.toFixed(1)}`;
-                });
-
-                path.setAttribute('d', d);
-            }
-        });
-
-        this._colEdgeMap.forEach((path, key) => {
-            if (!active.has(key)) path.style.display = 'none';
-        });
-    }
-
-    // ─── Visibility helpers ──────────────────────────────────────────────────
-
-    // Should the node participate in physics?
-    _nodeActive(n) {
-        if (!this._showHidden  && n._hideNode)  return false;
-        if (!this._showReports && n._isReport)  return false;
-        return true;
-    }
-
-    // Should the node be rendered (DOM display:block)?
-    _nodeVisible(n) {
-        if (!this._nodeActive(n)) return false;
-        if (this._reportFilter && !n._usedInReports && !n._isReport) return false;
-        return true;
-    }
-
-    // Should a satellite be visible given the current report filter?
-    _satVisible(parentNode, sat) {
-        if (!this._reportFilter) return true;
-        if (sat.type === 'more-cols' || sat.type === 'more-msrs') return true;
-        return this._reportUsedSet.has(`${parentNode.name}::${sat.name}`);
-    }
-
-    // Apply all visibility rules to every node and edge DOM element
-    _applyNodeVisibility() {
-        this._nodes.forEach(n => {
-            const vis = this._nodeVisible(n);
-            if (n._grp) n._grp.style.display = vis ? '' : 'none';
-            if (!vis && n.expanded) {
-                n.expanded = false;
-                n.satellites.forEach(sat => {
-                    if (sat._grp)   sat._grp.style.display   = 'none';
-                    if (sat._spoke) sat._spoke.style.display = 'none';
-                });
-                if (n._expandDot) n._expandDot.setAttribute('fill', 'white');
-            } else if (vis && n.expanded) {
-                // Re-evaluate per-satellite filter whenever visibility state changes
-                n.satellites.forEach(sat => {
-                    if (!sat._grp) return;
-                    const satVis = this._satVisible(n, sat);
-                    sat._grp.style.display   = satVis ? '' : 'none';
-                    if (sat._spoke) sat._spoke.style.display = satVis ? '' : 'none';
-                });
-            }
-        });
-        this._edges.forEach(e => {
-            const a = this._nodes[e.from], b = this._nodes[e.to];
-            let vis = this._nodeVisible(a) && this._nodeVisible(b);
-            // For field-level report edges, also hide when the satellite is filtered out
-            if (vis && e._isReportEdge && e._reportField) {
-                vis = this._reportUsedSet.size === 0 ||
-                      !this._reportFilter ||
-                      this._reportUsedSet.has(`${b.name}::${e._reportField}`);
-            }
-            if (e._path)  e._path.style.display  = vis ? '' : 'none';
-            if (e._label) e._label.style.display  = (vis && e.card) ? '' : 'none';
-        });
-    }
-
-    _setHiddenVisibility(show) {
-        this._showHidden = show;
-        if (show) {
-            this._nodes.forEach(n => {
-                if (!n._hideNode) return;
-                n.x = (Math.random() - 0.5) * 150;
-                n.y = (Math.random() - 0.5) * 150;
-                n.vx = 0; n.vy = 0;
-            });
-            this._alpha = Math.max(this._alpha, 0.6);
-        }
-        this._applyNodeVisibility();
-    }
-
-    _setReportVisibility(show) {
-        this._showReports = show;
-        if (show) {
-            this._nodes.forEach(n => {
-                if (!n._isReport) return;
-                // Position near centroid of connected table nodes
-                let cx = 0, cy = 0, cnt = 0;
-                this._edges.forEach(e => {
-                    if (!e._isReportEdge) return;
-                    const other = e.from === n._idx ? this._nodes[e.to]
-                                : e.to   === n._idx ? this._nodes[e.from] : null;
-                    if (other && !other._isReport) { cx += other.x; cy += other.y; cnt++; }
-                });
-                n.x = cnt > 0 ? cx / cnt + (Math.random() - 0.5) * 200 : (Math.random() - 0.5) * 400;
-                n.y = cnt > 0 ? cy / cnt + (Math.random() - 0.5) * 200 : (Math.random() - 0.5) * 400;
-                n.vx = 0; n.vy = 0;
-            });
-            this._alpha = Math.max(this._alpha, 0.7);
-        }
-        this._applyNodeVisibility();
-    }
-
-    _setReportFilter(enabled) {
-        this._reportFilter = enabled;
-        if (enabled) this._alpha = Math.max(this._alpha, 0.4);
-        this._applyNodeVisibility();
     }
 
     // ─── Interaction ─────────────────────────────────────────────────────────
@@ -1109,11 +638,8 @@ class OntologyRenderer {
                 const rect = svg.getBoundingClientRect();
                 const mx = (e.clientX - rect.left  - this._W / 2 - this._tx) / this._scale;
                 const my = (e.clientY - rect.top   - this._H / 2 - this._ty) / this._scale;
-                this._dragging.node.x  = mx;
-                this._dragging.node.y  = my;
-                this._dragging.node.vx = 0;
-                this._dragging.node.vy = 0;
-                this._alpha = Math.max(this._alpha, 0.08);
+                this._dragging.node.fx = mx;
+                this._dragging.node.fy = my;
             } else if (isPanning) {
                 this._tx = e.clientX - panStart.x;
                 this._ty = e.clientY - panStart.y;
@@ -1123,9 +649,9 @@ class OntologyRenderer {
 
         const onUp = () => {
             if (this._dragging) {
-                this._dragging.node._pinned = false;
-                this._dragging.node.vx = 0;
-                this._dragging.node.vy = 0;
+                this._dragging.node.fx = null;
+                this._dragging.node.fy = null;
+                if (this._simulation) this._simulation.alphaTarget(0);
                 this._dragging = null;
             }
             isPanning = false;
@@ -1147,7 +673,327 @@ class OntologyRenderer {
         svg.addEventListener('click', () => this._deselectAll(container));
     }
 
-    // ─── Selection & detail panel ────────────────────────────────────────────
+    // ─── Hover highlighting ───────────────────────────────────────────────────
+
+    _setHighlight(nodeIdx) {
+        this._highlightSet = new Set([nodeIdx]);
+        this._edges.forEach(e => {
+            if (e.from === nodeIdx) this._highlightSet.add(e.to);
+            if (e.to   === nodeIdx) this._highlightSet.add(e.from);
+        });
+
+        this._nodes.forEach((n, i) => {
+            if (!n._grp || n._grp.style.display === 'none') return;
+            n._grp.style.opacity = this._highlightSet.has(i) ? '1' : '0.15';
+        });
+        this._edges.forEach(e => {
+            if (!e._path || e._path.style.display === 'none') return;
+            const isConn = e.from === nodeIdx || e.to === nodeIdx;
+            e._path.style.opacity  = isConn ? '0.92' : '0.05';
+            if (e._label) e._label.style.opacity = isConn ? '1' : '0.05';
+        });
+    }
+
+    _clearHighlight() {
+        this._highlightSet = null;
+        this._nodes.forEach(n => { if (n._grp) n._grp.style.opacity = ''; });
+        this._edges.forEach(e => {
+            if (e._path)  e._path.style.opacity  = '';
+            if (e._label) e._label.style.opacity = '';
+        });
+    }
+
+    // ─── DOM updates ─────────────────────────────────────────────────────────
+
+    _updateDOM() {
+        this._nodes.forEach(node => {
+            if (!this._nodeActive(node) || !node._grp) return;
+            node._grp.setAttribute('transform', `translate(${node.x.toFixed(1)},${node.y.toFixed(1)})`);
+
+            if (node.expanded) {
+                node.satellites.forEach(sat => {
+                    if (!sat._grp) return;
+                    const sx = node.x + Math.cos(sat.angle) * sat.orbitR;
+                    const sy = node.y + Math.sin(sat.angle) * sat.orbitR;
+                    sat.x = sx; sat.y = sy;
+                    sat._grp.setAttribute('transform', `translate(${sx.toFixed(1)},${sy.toFixed(1)})`);
+                    if (sat._spoke) {
+                        const dx = sx - node.x, dy = sy - node.y;
+                        const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                        sat._spoke.setAttribute('x1', (node.x + dx / d * (node.radius + 3)).toFixed(1));
+                        sat._spoke.setAttribute('y1', (node.y + dy / d * (node.radius + 3)).toFixed(1));
+                        sat._spoke.setAttribute('x2', (sx - dx / d * sat.radius).toFixed(1));
+                        sat._spoke.setAttribute('y2', (sy - dy / d * sat.radius).toFixed(1));
+                    }
+                });
+            }
+        });
+
+        this._updateColEdges();
+        this._updateEdgePaths();
+    }
+
+    // Edge paths with bundling — relationship edges are routed through a shared
+    // control point pulled toward the graph centroid (radial bundling effect).
+    _updateEdgePaths() {
+        // Compute centroid of all visible relationship edges (bundle target)
+        let bcx = 0, bcy = 0, bcount = 0;
+        this._edges.forEach(e => {
+            if (e._isReportEdge) return;
+            const a = this._nodes[e.from], b = this._nodes[e.to];
+            if (!this._nodeVisible(a) || !this._nodeVisible(b)) return;
+            bcx += (a.x + b.x) / 2;
+            bcy += (a.y + b.y) / 2;
+            bcount++;
+        });
+        if (bcount > 0) { bcx /= bcount; bcy /= bcount; }
+
+        this._edges.forEach(edge => {
+            if (!edge._path) return;
+            const a = this._nodes[edge.from];
+            const b = this._nodes[edge.to];
+
+            if (edge._isReportEdge) {
+                let tx = b.x, ty = b.y, endR = b.radius + 5;
+                if (edge._reportField && b.expanded) {
+                    const sat = b.satellites.find(s =>
+                        s.name === edge._reportField && s._grp && s._grp.style.display !== 'none');
+                    if (sat) { tx = sat.x; ty = sat.y; endR = sat.radius + 3; }
+                }
+                const ddx = tx - a.x, ddy = ty - a.y;
+                const dd  = Math.sqrt(ddx * ddx + ddy * ddy) + 0.001;
+                const sx  = a.x + ddx / dd * (a.radius + 3);
+                const sy  = a.y + ddy / dd * (a.radius + 3);
+                const ex  = tx  - ddx / dd * endR;
+                const ey  = ty  - ddy / dd * endR;
+                const cx  = (sx + ex) / 2 - (ddy / dd) * 12;
+                const cy  = (sy + ey) / 2 + (ddx / dd) * 12;
+                edge._path.setAttribute('d',
+                    `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
+                return;
+            }
+
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+            const sx = a.x + dx / d * (a.radius + 4);
+            const sy = a.y + dy / d * (a.radius + 4);
+            const ex = b.x - dx / d * (b.radius + 14);
+            const ey = b.y - dy / d * (b.radius + 14);
+
+            // Pull control point toward bundle centroid (longer edges bundle more)
+            const mx = (sx + ex) / 2;
+            const my = (sy + ey) / 2;
+            const bundleFactor = Math.min(0.30, d / 2400);
+            const bx = mx + (bcx - mx) * bundleFactor - (dy / d) * 22;
+            const by = my + (bcy - my) * bundleFactor + (dx / d) * 22;
+
+            edge._path.setAttribute('d',
+                `M${sx.toFixed(1)},${sy.toFixed(1)} Q${bx.toFixed(1)},${by.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
+            if (edge._label) {
+                edge._label.setAttribute('x', bx.toFixed(1));
+                edge._label.setAttribute('y', (by - 9).toFixed(1));
+            }
+        });
+    }
+
+    // Arc edges from column satellites to measure satellites (annular zone)
+    _updateColEdges() {
+        if (!this._colEdgesLayer || !this._colEdgeMap) return;
+
+        const colLookup = new Map();
+        this._nodes.forEach(node => {
+            if (!node.expanded) return;
+            node.satellites.forEach(sat => {
+                if (sat.type === 'column' && sat._grp && sat._grp.style.display !== 'none') {
+                    colLookup.set(`${node.name}::${sat.name}`, sat);
+                }
+            });
+        });
+
+        const colToMsrs = new Map();
+        this._nodes.forEach(node => {
+            if (!node.expanded) return;
+            node.satellites.forEach(mSat => {
+                if (mSat.type !== 'measure' || !mSat.colRefs) return;
+                mSat.colRefs.forEach(ref => {
+                    if (ref.tableName !== node.name) return;
+                    const colKey = `${ref.tableName}::${ref.colName}`;
+                    if (!colLookup.has(colKey)) return;
+                    if (!colToMsrs.has(colKey)) colToMsrs.set(colKey, { msrList: [], node });
+                    colToMsrs.get(colKey).msrList.push(mSat);
+                });
+            });
+        });
+
+        const active = new Set(colToMsrs.keys());
+
+        const shortMid = (a, b) => {
+            let d = b - a;
+            if (d >  Math.PI) d -= 2 * Math.PI;
+            if (d < -Math.PI) d += 2 * Math.PI;
+            return a + d * 0.5;
+        };
+        const ep = (nx, ny, tx, ty, r) => {
+            const dx = tx - nx, dy = ty - ny;
+            const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
+            return [nx + dx / d * r, ny + dy / d * r];
+        };
+
+        colToMsrs.forEach(({ msrList, node: pNode }, colKey) => {
+            const colSat = colLookup.get(colKey);
+            if (!colSat) return;
+
+            let path = this._colEdgeMap.get(colKey);
+            if (!path) {
+                path = this._mkSVG('path', { fill: 'none', stroke: '#a78bfa', 'stroke-width': '1.4', 'stroke-dasharray': '4,3', opacity: '0.7', 'pointer-events': 'none' });
+                this._colEdgesLayer.appendChild(path);
+                this._colEdgeMap.set(colKey, path);
+            }
+            path.style.display = '';
+
+            const innerR   = colSat.orbitR;
+            const outerR   = msrList[0].orbitR;
+            const gap      = outerR - innerR;
+            const colAngle = Math.atan2(colSat.y - pNode.y, colSat.x - pNode.x);
+
+            if (msrList.length === 1) {
+                const mSat     = msrList[0];
+                const msrAngle = Math.atan2(mSat.y - pNode.y, mSat.x - pNode.x);
+                const ma       = shortMid(colAngle, msrAngle);
+                const cpR      = innerR + gap * 0.70;
+                const cpx      = pNode.x + Math.cos(ma) * cpR;
+                const cpy      = pNode.y + Math.sin(ma) * cpR;
+                const [x1, y1] = ep(colSat.x, colSat.y, cpx, cpy, colSat.radius);
+                const [x2, y2] = ep(mSat.x,   mSat.y,   cpx, cpy, mSat.radius);
+                path.setAttribute('d', `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cpx.toFixed(1)},${cpy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`);
+
+            } else {
+                let avgDx = 0, avgDy = 0;
+                msrList.forEach(m => { avgDx += m.x - pNode.x; avgDy += m.y - pNode.y; });
+                avgDx /= msrList.length; avgDy /= msrList.length;
+                const jAngle = Math.atan2(avgDy, avgDx);
+                const jR     = innerR + gap * 0.48;
+                const jx     = pNode.x + Math.cos(jAngle) * jR;
+                const jy     = pNode.y + Math.sin(jAngle) * jR;
+
+                const ma_t = shortMid(colAngle, jAngle);
+                const tcpR = innerR + gap * 0.28;
+                const tcpx = pNode.x + Math.cos(ma_t) * tcpR;
+                const tcpy = pNode.y + Math.sin(ma_t) * tcpR;
+                const [tx1, ty1] = ep(colSat.x, colSat.y, tcpx, tcpy, colSat.radius);
+                let d = `M${tx1.toFixed(1)},${ty1.toFixed(1)} Q${tcpx.toFixed(1)},${tcpy.toFixed(1)} ${jx.toFixed(1)},${jy.toFixed(1)}`;
+
+                msrList.forEach(mSat => {
+                    const msrAngle  = Math.atan2(mSat.y - pNode.y, mSat.x - pNode.x);
+                    const ma_b      = shortMid(jAngle, msrAngle);
+                    const bcpR      = innerR + gap * 0.78;
+                    const bcpx      = pNode.x + Math.cos(ma_b) * bcpR;
+                    const bcpy      = pNode.y + Math.sin(ma_b) * bcpR;
+                    const [bx2, by2] = ep(mSat.x, mSat.y, bcpx, bcpy, mSat.radius);
+                    d += ` M${jx.toFixed(1)},${jy.toFixed(1)} Q${bcpx.toFixed(1)},${bcpy.toFixed(1)} ${bx2.toFixed(1)},${by2.toFixed(1)}`;
+                });
+                path.setAttribute('d', d);
+            }
+        });
+
+        this._colEdgeMap.forEach((path, key) => {
+            if (!active.has(key)) path.style.display = 'none';
+        });
+    }
+
+    // ─── Visibility helpers ───────────────────────────────────────────────────
+
+    _nodeActive(n) {
+        if (!this._showHidden  && n._hideNode)  return false;
+        if (!this._showReports && n._isReport)  return false;
+        return true;
+    }
+
+    _nodeVisible(n) {
+        if (!this._nodeActive(n)) return false;
+        if (this._reportFilter && !n._usedInReports && !n._isReport) return false;
+        return true;
+    }
+
+    _satVisible(parentNode, sat) {
+        if (!this._reportFilter) return true;
+        if (sat.type === 'more-cols' || sat.type === 'more-msrs') return true;
+        return this._reportUsedSet.has(`${parentNode.name}::${sat.name}`);
+    }
+
+    _applyNodeVisibility() {
+        this._nodes.forEach(n => {
+            const vis = this._nodeVisible(n);
+            if (n._grp) n._grp.style.display = vis ? '' : 'none';
+            if (!vis && n.expanded) {
+                n.expanded = false;
+                n.satellites.forEach(sat => {
+                    if (sat._grp)   sat._grp.style.display   = 'none';
+                    if (sat._spoke) sat._spoke.style.display = 'none';
+                });
+                if (n._expandDot) n._expandDot.setAttribute('fill', 'white');
+            } else if (vis && n.expanded) {
+                n.satellites.forEach(sat => {
+                    if (!sat._grp) return;
+                    const satVis = this._satVisible(n, sat);
+                    sat._grp.style.display   = satVis ? '' : 'none';
+                    if (sat._spoke) sat._spoke.style.display = satVis ? '' : 'none';
+                });
+            }
+        });
+        this._edges.forEach(e => {
+            const a = this._nodes[e.from], b = this._nodes[e.to];
+            let vis = this._nodeVisible(a) && this._nodeVisible(b);
+            if (vis && e._isReportEdge && e._reportField) {
+                vis = this._reportUsedSet.size === 0 ||
+                      !this._reportFilter ||
+                      this._reportUsedSet.has(`${b.name}::${e._reportField}`);
+            }
+            if (e._path)  e._path.style.display  = vis ? '' : 'none';
+            if (e._label) e._label.style.display  = (vis && e.card) ? '' : 'none';
+        });
+    }
+
+    _setHiddenVisibility(show) {
+        this._showHidden = show;
+        if (show) {
+            this._nodes.forEach(n => {
+                if (!n._hideNode) return;
+                n.x = (Math.random() - 0.5) * 150;
+                n.y = (Math.random() - 0.5) * 150;
+            });
+            this._reheatSimulation(0.6);
+        }
+        this._applyNodeVisibility();
+    }
+
+    _setReportVisibility(show) {
+        this._showReports = show;
+        if (show) {
+            this._nodes.forEach(n => {
+                if (!n._isReport) return;
+                let cx = 0, cy = 0, cnt = 0;
+                this._edges.forEach(e => {
+                    if (!e._isReportEdge) return;
+                    const other = e.from === n._idx ? this._nodes[e.to]
+                                : e.to   === n._idx ? this._nodes[e.from] : null;
+                    if (other && !other._isReport) { cx += other.x; cy += other.y; cnt++; }
+                });
+                n.x = cnt > 0 ? cx / cnt + (Math.random() - 0.5) * 200 : (Math.random() - 0.5) * 400;
+                n.y = cnt > 0 ? cy / cnt + (Math.random() - 0.5) * 200 : (Math.random() - 0.5) * 400;
+            });
+            this._reheatSimulation(0.7);
+        }
+        this._applyNodeVisibility();
+    }
+
+    _setReportFilter(enabled) {
+        this._reportFilter = enabled;
+        if (enabled) this._reheatSimulation(0.4);
+        this._applyNodeVisibility();
+    }
+
+    // ─── Selection & detail panel ─────────────────────────────────────────────
 
     _selectNode(nodeIdx, container) {
         this._nodes.forEach((n, i) => {
@@ -1194,12 +1040,9 @@ class OntologyRenderer {
 
     _renderTableDetail(panel, node) {
         const t    = node.table;
-        const rels = (this.model.relationships || []).filter(r =>
-            r.fromTable === t.name || r.toTable === t.name
-        );
-        const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const rels = (this.model.relationships || []).filter(r => r.fromTable === t.name || r.toTable === t.name);
+        const esc  = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const TYPE_NAMES = { entity: 'Entity', fieldparam: 'Field Parameter', calcgroup: 'Calculation Group', hidden: 'Hidden Table' };
-
         panel.innerHTML = `
             <div class="ont-detail-header" style="border-left:4px solid ${node.color}">
                 <div class="ont-detail-title-row">
@@ -1272,6 +1115,7 @@ class OntologyRenderer {
             if (!e._isReportEdge) return;
             if (e.from === node._idx) tablesUsed.push(this._nodes[e.to].name);
         });
+        const uniqueTables = [...new Set(tablesUsed)];
         panel.innerHTML = `
             <div class="ont-detail-header" style="border-left:4px solid #0ea5e9">
                 <div class="ont-detail-title-row">
@@ -1284,13 +1128,13 @@ class OntologyRenderer {
             </div>
             <div class="ont-stats-grid">
                 <div class="ont-stat-cell"><div class="ont-stat-val">${node._visualCount || 0}</div><div class="ont-stat-key">Visuals</div></div>
-                <div class="ont-stat-cell"><div class="ont-stat-val">${tablesUsed.length}</div><div class="ont-stat-key">Tables</div></div>
+                <div class="ont-stat-cell"><div class="ont-stat-val">${uniqueTables.length}</div><div class="ont-stat-key">Tables</div></div>
             </div>
-            ${tablesUsed.length > 0 ? `
+            ${uniqueTables.length > 0 ? `
             <div class="ont-section">
                 <div class="ont-section-label">Tables Referenced</div>
                 <ul class="ont-prop-list">
-                    ${tablesUsed.map(t => `<li><span class="ont-prop-name">${esc(t)}</span></li>`).join('')}
+                    ${uniqueTables.map(t => `<li><span class="ont-prop-name">${esc(t)}</span></li>`).join('')}
                 </ul>
             </div>` : ''}
         `;
@@ -1364,7 +1208,7 @@ class OntologyRenderer {
                 <span>Measure / KPI</span>
             </div>
             <div class="ont-legend-sep"></div>
-            <div class="ont-legend-hint">Click to expand · Drag · Scroll to zoom</div>
+            <div class="ont-legend-hint">Click to expand · Drag · Scroll to zoom · Hover to highlight</div>
         `;
 
         const hiddenCount = this._nodes.filter(n => n._hideNode).length;
@@ -1375,9 +1219,7 @@ class OntologyRenderer {
             btn.addEventListener('click', () => {
                 const nowShow = !this._showHidden;
                 this._setHiddenVisibility(nowShow);
-                btn.textContent = nowShow
-                    ? `Hide hidden tables (${hiddenCount})`
-                    : `Show hidden tables (${hiddenCount})`;
+                btn.textContent = nowShow ? `Hide hidden tables (${hiddenCount})` : `Show hidden tables (${hiddenCount})`;
                 btn.classList.toggle('ont-hidden-toggle--active', nowShow);
             });
             div.appendChild(btn);
@@ -1385,21 +1227,17 @@ class OntologyRenderer {
 
         const reportCount = this._nodes.filter(n => n._isReport).length;
         if (reportCount > 0) {
-            // Toggle: show/hide report page nodes
             const rBtn = document.createElement('button');
             rBtn.className = 'ont-hidden-toggle';
             rBtn.textContent = `Show report pages (${reportCount})`;
             rBtn.addEventListener('click', () => {
                 const nowShow = !this._showReports;
                 this._setReportVisibility(nowShow);
-                rBtn.textContent = nowShow
-                    ? `Hide report pages (${reportCount})`
-                    : `Show report pages (${reportCount})`;
+                rBtn.textContent = nowShow ? `Hide report pages (${reportCount})` : `Show report pages (${reportCount})`;
                 rBtn.classList.toggle('ont-hidden-toggle--active', nowShow);
             });
             div.appendChild(rBtn);
 
-            // Filter: show only tables used in at least one report
             const usedN  = this._nodes.filter(n => !n._isReport && n._usedInReports).length;
             const totalN = this._nodes.filter(n => !n._isReport && !n._hideNode).length;
             const fBtn = document.createElement('button');
@@ -1409,9 +1247,7 @@ class OntologyRenderer {
                 const nowFilter = !this._reportFilter;
                 this._setReportFilter(nowFilter);
                 fBtn.classList.toggle('ont-hidden-toggle--active', nowFilter);
-                fBtn.textContent = nowFilter
-                    ? `Show all tables`
-                    : `Filter: report-used only (${usedN}/${totalN})`;
+                fBtn.textContent = nowFilter ? `Show all tables` : `Filter: report-used only (${usedN}/${totalN})`;
             });
             div.appendChild(fBtn);
         }
@@ -1432,20 +1268,12 @@ class OntologyRenderer {
             const props = [];
             let pIdx = 0;
             (t.columns || []).forEach(c => {
-                props.push({ id: BASE_PROP + i * 1000 + pIdx++, name: c.name,
-                    dataType: this._mapDataType(c.dataType), isHidden: !!c.isHidden, isMeasure: false });
+                props.push({ id: BASE_PROP + i * 1000 + pIdx++, name: c.name, dataType: this._mapDataType(c.dataType), isHidden: !!c.isHidden, isMeasure: false });
             });
             (t.measures || []).forEach(m => {
-                props.push({ id: BASE_PROP + i * 1000 + pIdx++, name: m.name,
-                    dataType: 'Double', isHidden: !!m.isHidden, isMeasure: true,
-                    formatString: m.formatString || '', description: m.description || '' });
+                props.push({ id: BASE_PROP + i * 1000 + pIdx++, name: m.name, dataType: 'Double', isHidden: !!m.isHidden, isMeasure: true, formatString: m.formatString || '', description: m.description || '' });
             });
-            return {
-                id: BASE_ENT + i, name: t.name, description: t.description || '',
-                isHidden: !!t.isHidden,
-                entityKind: t._isFieldParameter ? 'FieldParameter' : t._isCalcGroup ? 'CalculationGroup' : 'Regular',
-                properties: props
-            };
+            return { id: BASE_ENT + i, name: t.name, description: t.description || '', isHidden: !!t.isHidden, entityKind: t._isFieldParameter ? 'FieldParameter' : t._isCalcGroup ? 'CalculationGroup' : 'Regular', properties: props };
         });
 
         const entityIdx = {};
@@ -1469,10 +1297,7 @@ class OntologyRenderer {
     }
 
     _mapDataType(dt) {
-        const map = { int64: 'BigInt', int32: 'BigInt', integer: 'BigInt',
-            double: 'Double', decimal: 'Double', currency: 'Double', single: 'Double',
-            string: 'String', text: 'String', boolean: 'Boolean',
-            datetime: 'DateTime', date: 'DateTime', time: 'DateTime' };
+        const map = { int64: 'BigInt', int32: 'BigInt', integer: 'BigInt', double: 'Double', decimal: 'Double', currency: 'Double', single: 'Double', string: 'String', text: 'String', boolean: 'Boolean', datetime: 'DateTime', date: 'DateTime', time: 'DateTime' };
         return map[(dt || '').toLowerCase()] || 'String';
     }
 
