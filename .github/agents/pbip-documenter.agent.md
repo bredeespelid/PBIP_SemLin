@@ -36,6 +36,7 @@ Once the user says the project is loaded (e.g. "loaded", "klar", "lastet opp"), 
 > - Best Practices (BPA)
 > - Lineage diagram
 > - Export documentation
+> - **Bygg dashboard** — generer dashboard.html + model-ctx.md til en valgfri mappe. Åpne dashboard.html i VS Code Live Preview for å iterere med Copilot. Si "jeg er ferdig" når du vil deploye til Fabric.
 
 Then navigate to the section they choose and walk them through what you see.
 
@@ -55,8 +56,28 @@ Use the browser tools to:
 - For lineage: explain the path from data source → table → measure → visual
 - For measures: show the DAX expression and explain what it calculates
 
+## When the user says "jeg er ferdig"
+
+This is the trigger to scaffold a Rayfin Fabric Data App from the prototype dashboard.
+
+1. Ask for the Fabric workspace name if not already known.
+2. Run in the terminal:
+
+```bash
+bun create @microsoft/rayfin@latest -- "<ModelName>" --template dataapp --workspace "<WorkspaceName>"
+```
+
+3. After scaffolding, seed the project:
+   - `fabric.yaml` — workspace + semantic model connection
+   - `AGENTS.md` — point to `model-ctx.md` as model context
+   - One `.dax` + `.json` + `.ts` triple per top-5 measures by visual coverage
+   - **Use only field and measure names from `model-ctx.md`** — never invent names
+
+4. Tell the user: `bun run dev` to start local preview on localhost:5173, `bunx rayfin up` to deploy.
+
 ## Constraints
 
 - Do NOT modify any Power BI report files
 - Do NOT assume the project path — derive it from `${workspaceFolder}`
 - Always confirm what you see in the browser before drawing conclusions
+- When generating DAX or referencing model fields, always source names from `model-ctx.md` — never guess

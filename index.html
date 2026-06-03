@@ -156,7 +156,7 @@
             <div class="download-bar-header">
                 <span class="label">Export Documentation</span>
             </div>
-            <div class="download-bar-grid download-bar-grid-2col">
+            <div class="download-bar-grid download-bar-grid-3col">
                 <div class="btn-download-group">
                     <button id="downloadFullReport" class="btn-download btn-download-card">
                         <span class="material-symbols-outlined btn-download-icon">auto_awesome</span>
@@ -198,6 +198,13 @@
                             Visuals Only
                         </button>
                     </div>
+                </div>
+                <div class="btn-download-group">
+                    <button id="buildDashboardBtn" class="btn-download btn-download-card btn-download-dashboard">
+                        <span class="material-symbols-outlined btn-download-icon">dashboard_customize</span>
+                        <span class="btn-download-label">Bygg dashboard</span>
+                        <span class="btn-download-desc">Skriv dashboard.html + model-ctx.md til en mappe. Iterer med Copilot.</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -815,6 +822,7 @@
     <script src="src/mermaid-exporter.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="src/ontology-view.js"></script>
+    <script src="src/dashboard-generator.js"></script>
     <script src="src/app.js"></script>
 
     <!-- Sponsor Toast Script -->

@@ -69,6 +69,7 @@ class App {
         document.getElementById('downloadMDAll').addEventListener('click', (e) => this.downloadMarkdown('all', e.currentTarget));
         document.getElementById('downloadMDModel').addEventListener('click', (e) => this.downloadMarkdown('model', e.currentTarget));
         document.getElementById('downloadMDVisual').addEventListener('click', (e) => this.downloadMarkdown('visuals', e.currentTarget));
+        document.getElementById('buildDashboardBtn').addEventListener('click', (e) => this.buildDashboard(e.currentTarget));
 
         // Sidebar navigation
         document.querySelectorAll('.sidebar-header').forEach(header => {
@@ -3387,6 +3388,70 @@ class App {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    }
+
+    // ──────────────────────────────────────────────
+    // BYGG DASHBOARD — File System Access write
+    // ──────────────────────────────────────────────
+
+    async buildDashboard(btn = null) {
+        if (!this.parsedModel) {
+            this.showToast('Open a PBIP folder first', 'error');
+            return;
+        }
+
+        const originalHTML = btn ? btn.innerHTML : null;
+        if (btn) {
+            btn.innerHTML = '<span class="material-symbols-outlined btn-download-icon">hourglass_top</span><span class="btn-download-label">Generating…</span>';
+            btn.disabled = true;
+        }
+
+        try {
+            // Ask user for output folder
+            let dirHandle;
+            try {
+                dirHandle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+                throw err;
+            }
+
+            this._track('Dashboard Build', {
+                tables: this.parsedModel.tables.length,
+                measures: this.parsedModel.tables.reduce((s, t) => s + t.measures.length, 0)
+            });
+
+            // Generate content from in-memory model (no re-parsing)
+            const mdContent   = DashboardGenerator.generateModelContext(
+                this.parsedModel, this.visualData, this.lineageEngine
+            );
+            const htmlContent = DashboardGenerator.generateDashboard(
+                this.parsedModel, this.visualData, this.lineageEngine
+            );
+
+            // Write model-ctx.md
+            const mdHandle = await dirHandle.getFileHandle('model-ctx.md', { create: true });
+            const mdWritable = await mdHandle.createWritable();
+            await mdWritable.write(mdContent);
+            await mdWritable.close();
+
+            // Write dashboard.html
+            const htmlHandle = await dirHandle.getFileHandle('dashboard.html', { create: true });
+            const htmlWritable = await htmlHandle.createWritable();
+            await htmlWritable.write(htmlContent);
+            await htmlWritable.close();
+
+            this.showToast('✓ dashboard.html + model-ctx.md skrevet til ' + dirHandle.name, 'success');
+
+        } catch (err) {
+            this.showToast('Dashboard-bygging feilet: ' + err.message, 'error');
+            console.error('buildDashboard error:', err);
+        } finally {
+            if (btn && originalHTML !== null) {
+                btn.innerHTML = originalHTML;
+                btn.disabled = false;
+            }
+        }
     }
 
     // ──────────────────────────────────────────────

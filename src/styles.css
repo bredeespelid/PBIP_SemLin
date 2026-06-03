@@ -815,6 +815,23 @@ tr:hover {
     grid-template-columns: 1fr 1fr;
 }
 
+.download-bar-grid-3col {
+    grid-template-columns: 1fr 1fr 1fr;
+}
+
+.btn-download-dashboard {
+    border-color: rgba(39,174,96,0.35) !important;
+}
+
+.btn-download-dashboard:hover {
+    border-color: rgba(39,174,96,0.7) !important;
+    background: rgba(39,174,96,0.08) !important;
+}
+
+.btn-download-dashboard .btn-download-icon {
+    color: #27ae60 !important;
+}
+
 .btn-download-group {
     position: relative;
 }

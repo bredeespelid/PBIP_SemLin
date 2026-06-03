@@ -76,3 +76,66 @@ Hjelp dem med å:
 
 Hvis de jobber i dette repoet direkte kan de også bruke VS Code-tasken:
 `Ctrl+Shift+P` → **Tasks: Run Task** → **Generate PBIP Docs**
+
+---
+
+## Bygg dashboard — prototype og Fabric Data App
+
+Etter at en PBIP-modell er lastet i nettleserappen, kan brukeren klikke **Bygg dashboard** i download-baren.
+
+### Hva som skrives til disk
+
+Brukeren velger en mappe via File System Access API. To filer skrives:
+
+**`model-ctx.md`** — Copilot-kontekst for videre utvikling:
+- Alle tabeller med kolonner og datatyper
+- Alle measures med fulle DAX-uttrykk
+- Alle relasjoner med kardinalitet og kryss-filter-retning
+- Datakilder med konnektortype og fysisk tabellnavn
+- Notater om hva feltnavnene heter i DAX
+
+**`dashboard.html`** — Selvinneholdt prototyp-dashboard:
+- Ingen server nødvendig — fungerer på `file://` og VS Code Live Preview
+- `const MODEL = {...}` JSON øverst inneholder all modelldata hentet fra in-memory modell
+- D3.js (lastet fra cdnjs CDN) rendrer KPI-kort, søylediagram og relasjonsdiagram
+- KPI-kort viser top-3 measures etter visual coverage; verdier er `—` (ingen DAX-engine i browser)
+- Søylediagram: measures per tabell
+- Force-diagram: tabeller som noder, relasjoner som kanter
+
+### Utviklingsflyt
+
+1. Åpne `dashboard.html` i **VS Code Live Preview**
+2. Iterer med GitHub Copilot — alle feltnavn er i `model-ctx.md` og `const MODEL`
+3. Copilot vil lese `model-ctx.md` automatisk som kontekst
+4. Si **"jeg er ferdig"** → Copilot scaffolder et Rayfin Fabric Data App-prosjekt
+
+### "jeg er ferdig" — Rayfin scaffold-trigger
+
+Når brukeren sier "jeg er ferdig" i en Copilot-samtale:
+
+```bash
+bun create @microsoft/rayfin@latest -- "AppName" \
+  --template dataapp --workspace "WorkspaceName"
+```
+
+Frø Rayfin-prosjektet med:
+- `fabric.yaml` med workspace + modell-tilkobling
+- `AGENTS.md` som peker på `model-ctx.md` som modellkontekst
+- Én `.dax` + `.json` + `.ts` per top-5 measure etter visual coverage
+  (bruk kun kolonne- og measurenavn fra `model-ctx.md` — aldri oppfinn navn)
+
+Lokal utvikling: `bun run dev` (localhost:5173, spørrer live modell)
+Deploy: `bunx rayfin up`
+
+### Kildekode
+
+```
+src/dashboard-generator.js   ← generateModelContext() + generateDashboard()
+src/app.js                   ← buildDashboard() — File System Access API write
+```
+
+Alle nye kildefiler legges i `src/` og lastes via `<script>` i `index.html` i riktig avhengighetsrekkefølge.
+
+### Fabric Data Apps (ny juni 2026)
+
+En Fabric Data App er en webapp hostet i Microsoft Fabric som spørrer en semantisk modell via `executeQueries` DAX API — som en Power BI-rapport, men bygget helt i kode. Rayfin CLI (`@microsoft/rayfin`) håndterer scaffolding, lokal dev og deploy.
