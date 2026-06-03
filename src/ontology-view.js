@@ -427,12 +427,12 @@ class OntologyRenderer {
     }
 
     _createSatelliteElement(sat, parentNode, container) {
-        // Spoke — columns only; measures connect via arc edges
+        // Dotted spoke — column spokes only; measures use bundled trunk
         let spoke = null;
         if (sat.type !== 'measure') {
             spoke = this._mkSVG('line', {
                 stroke: parentNode.color, 'stroke-width': '1',
-                'stroke-dasharray': '3,3', opacity: '0.35'
+                'stroke-dasharray': '2,4', opacity: '0.45'
             });
             this._spokesLayer.appendChild(spoke);
         }
@@ -612,9 +612,13 @@ class OntologyRenderer {
             const grp = this._mkSVG('g');
             let path;
             if (edge._isReportEdge) {
-                path = this._mkSVG('path', { fill: 'none', stroke: '#0ea5e9', 'stroke-width': '1', opacity: '0.28', 'stroke-dasharray': '5,4' });
+                // Long dashes — external report linkage
+                path = this._mkSVG('path', { fill: 'none', stroke: '#0ea5e9',
+                    'stroke-width': '1.2', opacity: '0.45', 'stroke-dasharray': '10,5' });
             } else {
-                path = this._mkSVG('path', { fill: 'none', stroke: '#94a3b8', 'stroke-width': '1.5', opacity: '0.55', 'marker-end': 'url(#ont-arrow)' });
+                // Solid — primary structural model relationship
+                path = this._mkSVG('path', { fill: 'none', stroke: '#94a3b8',
+                    'stroke-width': '2', opacity: '0.6', 'marker-end': 'url(#ont-arrow)' });
             }
             grp.appendChild(path);
             edge._path = path;
@@ -826,10 +830,11 @@ class OntologyRenderer {
         }
 
         if (!node._msrTrunkEl) {
+            // Dash-dot — bundled measure trunk+branches
             node._msrTrunkEl = this._mkSVG('path', {
                 fill: 'none', stroke: node.color,
-                'stroke-width': '1', 'stroke-dasharray': '3,3',
-                opacity: '0.35', 'pointer-events': 'none'
+                'stroke-width': '1.2', 'stroke-dasharray': '6,3,2,3',
+                opacity: '0.45', 'pointer-events': 'none'
             });
             this._spokesLayer.appendChild(node._msrTrunkEl);
         }
@@ -913,7 +918,8 @@ class OntologyRenderer {
 
             let path = this._colEdgeMap.get(colKey);
             if (!path) {
-                path = this._mkSVG('path', { fill: 'none', stroke: '#a78bfa', 'stroke-width': '1.4', 'stroke-dasharray': '4,3', opacity: '0.7', 'pointer-events': 'none' });
+                // Short dashes — DAX column→measure dependency arc
+                path = this._mkSVG('path', { fill: 'none', stroke: '#a78bfa', 'stroke-width': '1.6', 'stroke-dasharray': '5,2', opacity: '0.75', 'pointer-events': 'none' });
                 this._colEdgesLayer.appendChild(path);
                 this._colEdgeMap.set(colKey, path);
             }
@@ -1291,6 +1297,23 @@ class OntologyRenderer {
                 </svg>
                 <span>Measure / KPI</span>
             </div>
+            <div class="ont-legend-sep"></div>
+            <div class="ont-legend-title">Edge Types</div>
+            ${[
+                { dash: 'none',       color: '#94a3b8', label: 'Relationship',       w: 2   },
+                { dash: '10,5',       color: '#0ea5e9', label: 'Report reference',   w: 1.2 },
+                { dash: '2,4',        color: '#64748b', label: 'Column membership',  w: 1   },
+                { dash: '6,3,2,3',    color: '#64748b', label: 'Measure group',      w: 1.2 },
+                { dash: '5,2',        color: '#a78bfa', label: 'DAX dependency',     w: 1.6 },
+            ].map(it => `
+                <div class="ont-legend-item">
+                    <svg width="26" height="10" viewBox="0 0 26 10" style="flex-shrink:0">
+                        <line x1="2" y1="5" x2="24" y2="5" stroke="${it.color}"
+                            stroke-width="${it.w}"
+                            ${it.dash !== 'none' ? `stroke-dasharray="${it.dash}"` : ''}/>
+                    </svg>
+                    <span>${it.label}</span>
+                </div>`).join('')}
             <div class="ont-legend-sep"></div>
             <div class="ont-legend-hint">Click to expand · Drag · Scroll to zoom · Hover to highlight</div>
         `;
