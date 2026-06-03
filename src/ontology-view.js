@@ -1361,7 +1361,163 @@ class OntologyRenderer {
             div.appendChild(fBtn);
         }
 
+        // Export YAML button
+        const yBtn = document.createElement('button');
+        yBtn.className = 'ont-hidden-toggle';
+        yBtn.textContent = 'Export YAML';
+        yBtn.addEventListener('click', () => this.exportOntologyYAML());
+        div.appendChild(yBtn);
+
         container.appendChild(div);
+    }
+
+    // ─── YAML export ─────────────────────────────────────────────────────────
+
+    _toYAML(val, indent = 0) {
+        const pad = ' '.repeat(indent);
+        const pad2 = ' '.repeat(indent + 2);
+        if (val === null || val === undefined) return 'null';
+        if (typeof val === 'boolean') return val ? 'true' : 'false';
+        if (typeof val === 'number') return String(val);
+        if (typeof val === 'string') {
+            // multi-line block scalar
+            if (val.includes('\n')) {
+                return '|\n' + val.split('\n').map(l => pad2 + l).join('\n');
+            }
+            // quote if contains special chars
+            if (/[:#\[\]{}&*!|>'"%@`]/.test(val) || val.trim() !== val || val === '') {
+                return `"${val.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+            }
+            return val;
+        }
+        if (Array.isArray(val)) {
+            if (val.length === 0) return '[]';
+            return '\n' + val.map(item => {
+                const rendered = this._toYAML(item, indent + 2);
+                if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+                    // inline first key on the dash line
+                    return `${pad}- ${rendered.trimStart()}`;
+                }
+                return `${pad}- ${rendered}`;
+            }).join('\n');
+        }
+        if (typeof val === 'object') {
+            const keys = Object.keys(val);
+            if (keys.length === 0) return '{}';
+            return keys.map(k => {
+                const v = val[k];
+                const yk = this._toYAML(k, 0);
+                if (typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length > 0) {
+                    return `${pad}${yk}:\n${this._toYAML(v, indent + 2)}`;
+                }
+                if (Array.isArray(v) && v.length > 0) {
+                    return `${pad}${yk}:${this._toYAML(v, indent)}`;
+                }
+                return `${pad}${yk}: ${this._toYAML(v, indent + 2)}`;
+            }).join('\n');
+        }
+        return String(val);
+    }
+
+    exportOntologyYAML() {
+        const visibleTableNodes = this._nodes.filter(n =>
+            !n._isReport && this._nodeVisible(n)
+        );
+        const visibleTableNames = new Set(visibleTableNodes.map(n => n.name));
+
+        const entities = visibleTableNodes.map(node => {
+            const columns = (node.cols || [])
+                .filter(c => {
+                    if (!this._reportFilter) return true;
+                    return this._reportUsedSet.has(`${node.name}::${c.name}`);
+                })
+                .map(c => ({
+                    name: c.name,
+                    dataType: this._mapDataType(c.dataType),
+                    ...(c.isKey   ? { isKey: true }    : {}),
+                    ...(c.isHidden ? { isHidden: true } : {}),
+                }));
+
+            const measures = (node.measures || [])
+                .filter(m => {
+                    if (!this._reportFilter) return true;
+                    return this._reportUsedSet.has(`${node.name}::${m.name}`);
+                })
+                .map(m => ({
+                    name: m.name,
+                    ...(m.formatString  ? { formatString: m.formatString }   : {}),
+                    ...(m.description   ? { description:  m.description  }   : {}),
+                    ...(m.expression    ? { expression:   m.expression.trim() } : {}),
+                }));
+
+            const relationships = (this.model.relationships || [])
+                .filter(r =>
+                    (r.fromTable === node.name && visibleTableNames.has(r.toTable)) ||
+                    (r.toTable   === node.name && visibleTableNames.has(r.fromTable))
+                )
+                .map(r => ({
+                    from: `${r.fromTable}[${r.fromColumn}]`,
+                    to:   `${r.toTable}[${r.toColumn}]`,
+                    cardinality: `${r.fromCardinality === 'Many' ? '*' : '1'}:${r.toCardinality === 'Many' ? '*' : '1'}`,
+                    ...(r.isActive === false ? { isActive: false } : {}),
+                }));
+
+            const entry = {
+                name: node.name,
+                ...(node.table?.description ? { description: node.table.description } : {}),
+                ...(node.typeKey !== 'regular' ? { kind: node.typeKey } : {}),
+            };
+            if (columns.length)      entry.columns      = columns;
+            if (measures.length)     entry.measures      = measures;
+            if (relationships.length) entry.relationships = relationships;
+            return entry;
+        });
+
+        const reportPages = this._showReports
+            ? this._nodes
+                .filter(n => n._isReport)
+                .map(n => {
+                    const fieldEdges = this._edges.filter(e =>
+                        e._isReportEdge &&
+                        this._nodes[e.from || 0]?.id === n.id &&
+                        e._reportField
+                    );
+                    const fields = [...new Set(fieldEdges.map(e => {
+                        const tNode = this._nodes[e.to];
+                        return tNode ? `${tNode.name}[${e._reportField}]` : e._reportField;
+                    }))].sort();
+
+                    return {
+                        name: n.name,
+                        visualCount: n._visualCount || 0,
+                        ...(fields.length ? { referencedFields: fields } : {}),
+                    };
+                })
+            : [];
+
+        const doc = {
+            modelName:   this.model.name || 'SemanticModel',
+            exportedAt:  new Date().toISOString(),
+            filters: {
+                reportUsedOnly:   this._reportFilter,
+                showHiddenTables: this._showHidden,
+                showReportPages:  this._showReports,
+            },
+            entities,
+            ...(reportPages.length ? { reportPages } : {}),
+        };
+
+        const yaml = `# Ontology export — ${doc.modelName}\n# Generated by pbip-semlin · ${doc.exportedAt}\n\n${this._toYAML(doc, 0)}\n`;
+
+        const blob = new Blob([yaml], { type: 'text/yaml' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `${(doc.modelName || 'ontology').replace(/\s+/g, '_')}_ontology.yaml`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     // ─── Fabric IQ export ────────────────────────────────────────────────────
