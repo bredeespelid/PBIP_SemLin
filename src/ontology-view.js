@@ -733,27 +733,16 @@ class OntologyRenderer {
         this._updateEdgePaths();
     }
 
-    // Edge paths with bundling — relationship edges are routed through a shared
-    // control point pulled toward the graph centroid (radial bundling effect).
+    // Edge paths — relationship edges arc outward (never through inner rings).
+    // Report edges aim directly at the target satellite when expanded.
     _updateEdgePaths() {
-        // Compute centroid of all visible relationship edges (bundle target)
-        let bcx = 0, bcy = 0, bcount = 0;
-        this._edges.forEach(e => {
-            if (e._isReportEdge) return;
-            const a = this._nodes[e.from], b = this._nodes[e.to];
-            if (!this._nodeVisible(a) || !this._nodeVisible(b)) return;
-            bcx += (a.x + b.x) / 2;
-            bcy += (a.y + b.y) / 2;
-            bcount++;
-        });
-        if (bcount > 0) { bcx /= bcount; bcy /= bcount; }
-
         this._edges.forEach(edge => {
             if (!edge._path) return;
             const a = this._nodes[edge.from];
             const b = this._nodes[edge.to];
 
             if (edge._isReportEdge) {
+                // Aim at the specific satellite when the target table is expanded
                 let tx = b.x, ty = b.y, endR = b.radius + 5;
                 if (edge._reportField && b.expanded) {
                     const sat = b.satellites.find(s =>
@@ -766,26 +755,30 @@ class OntologyRenderer {
                 const sy  = a.y + ddy / dd * (a.radius + 3);
                 const ex  = tx  - ddx / dd * endR;
                 const ey  = ty  - ddy / dd * endR;
-                const cx  = (sx + ex) / 2 - (ddy / dd) * 12;
-                const cy  = (sy + ey) / 2 + (ddx / dd) * 12;
+                // Cubic bezier: CP1 leans away from source, CP2 leans away from target
+                // so the arc bulges outward and never dips through inner layers
+                const cp1x = sx - ddy / dd * 18 + ddx / dd * 12;
+                const cp1y = sy + ddx / dd * 18 + ddy / dd * 12;
+                const cp2x = ex - ddy / dd * 18 - ddx / dd * 12;
+                const cp2y = ey + ddx / dd * 18 - ddy / dd * 12;
                 edge._path.setAttribute('d',
-                    `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
+                    `M${sx.toFixed(1)},${sy.toFixed(1)} C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
                 return;
             }
 
+            // Relationship edge (table ↔ table): arc outward with perpendicular offset.
+            // Control point is pushed away from the midpoint — never toward center.
             const dx = b.x - a.x, dy = b.y - a.y;
             const d  = Math.sqrt(dx * dx + dy * dy) + 0.001;
             const sx = a.x + dx / d * (a.radius + 4);
             const sy = a.y + dy / d * (a.radius + 4);
             const ex = b.x - dx / d * (b.radius + 14);
             const ey = b.y - dy / d * (b.radius + 14);
-
-            // Pull control point toward bundle centroid (longer edges bundle more)
             const mx = (sx + ex) / 2;
             const my = (sy + ey) / 2;
-            const bundleFactor = Math.min(0.30, d / 2400);
-            const bx = mx + (bcx - mx) * bundleFactor - (dy / d) * 22;
-            const by = my + (bcy - my) * bundleFactor + (dx / d) * 22;
+            // Pure perpendicular offset — bulges outward, stays clear of all layers
+            const bx = mx - (dy / d) * 30;
+            const by = my + (dx / d) * 30;
 
             edge._path.setAttribute('d',
                 `M${sx.toFixed(1)},${sy.toFixed(1)} Q${bx.toFixed(1)},${by.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
@@ -796,7 +789,9 @@ class OntologyRenderer {
         });
     }
 
-    // Arc edges from column satellites to measure satellites (annular zone)
+    // Arc edges from column (inner ring) to measure (outer ring) satellites.
+    // Control points are placed OUTSIDE the outer ring so arcs never dip
+    // back through the inner ring or the table node layer.
     _updateColEdges() {
         if (!this._colEdgesLayer || !this._colEdgeMap) return;
 
@@ -855,29 +850,42 @@ class OntologyRenderer {
             const outerR   = msrList[0].orbitR;
             const gap      = outerR - innerR;
             const colAngle = Math.atan2(colSat.y - pNode.y, colSat.x - pNode.x);
+            // archR: control points placed OUTSIDE the outer ring
+            const archR    = outerR + gap * 0.55;
 
             if (msrList.length === 1) {
                 const mSat     = msrList[0];
                 const msrAngle = Math.atan2(mSat.y - pNode.y, mSat.x - pNode.x);
-                const ma       = shortMid(colAngle, msrAngle);
-                const cpR      = innerR + gap * 0.70;
-                const cpx      = pNode.x + Math.cos(ma) * cpR;
-                const cpy      = pNode.y + Math.sin(ma) * cpR;
-                const [x1, y1] = ep(colSat.x, colSat.y, cpx, cpy, colSat.radius);
-                const [x2, y2] = ep(mSat.x,   mSat.y,   cpx, cpy, mSat.radius);
-                path.setAttribute('d', `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cpx.toFixed(1)},${cpy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`);
+
+                // Distribute the two cubic bezier CPs evenly along the short arc
+                // at archR so the curve sweeps outside both rings.
+                let delta = msrAngle - colAngle;
+                if (delta >  Math.PI) delta -= 2 * Math.PI;
+                if (delta < -Math.PI) delta += 2 * Math.PI;
+                const cp1Angle = colAngle + delta * 0.25;
+                const cp2Angle = colAngle + delta * 0.75;
+                const cp1x = pNode.x + Math.cos(cp1Angle) * archR;
+                const cp1y = pNode.y + Math.sin(cp1Angle) * archR;
+                const cp2x = pNode.x + Math.cos(cp2Angle) * archR;
+                const cp2y = pNode.y + Math.sin(cp2Angle) * archR;
+                const [x1, y1] = ep(colSat.x, colSat.y, cp1x, cp1y, colSat.radius);
+                const [x2, y2] = ep(mSat.x,   mSat.y,   cp2x, cp2y, mSat.radius);
+                path.setAttribute('d',
+                    `M${x1.toFixed(1)},${y1.toFixed(1)} C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`);
 
             } else {
+                // Shared junction placed OUTSIDE outer ring at average measure direction
                 let avgDx = 0, avgDy = 0;
                 msrList.forEach(m => { avgDx += m.x - pNode.x; avgDy += m.y - pNode.y; });
                 avgDx /= msrList.length; avgDy /= msrList.length;
                 const jAngle = Math.atan2(avgDy, avgDx);
-                const jR     = innerR + gap * 0.48;
+                const jR     = outerR + gap * 0.40;   // outside outer ring
                 const jx     = pNode.x + Math.cos(jAngle) * jR;
                 const jy     = pNode.y + Math.sin(jAngle) * jR;
 
+                // Trunk: col → junction; CP also outside outer ring
                 const ma_t = shortMid(colAngle, jAngle);
-                const tcpR = innerR + gap * 0.28;
+                const tcpR = outerR + gap * 0.20;
                 const tcpx = pNode.x + Math.cos(ma_t) * tcpR;
                 const tcpy = pNode.y + Math.sin(ma_t) * tcpR;
                 const [tx1, ty1] = ep(colSat.x, colSat.y, tcpx, tcpy, colSat.radius);
@@ -886,7 +894,7 @@ class OntologyRenderer {
                 msrList.forEach(mSat => {
                     const msrAngle  = Math.atan2(mSat.y - pNode.y, mSat.x - pNode.x);
                     const ma_b      = shortMid(jAngle, msrAngle);
-                    const bcpR      = innerR + gap * 0.78;
+                    const bcpR      = outerR + gap * 0.50;   // outside outer ring
                     const bcpx      = pNode.x + Math.cos(ma_b) * bcpR;
                     const bcpy      = pNode.y + Math.sin(ma_b) * bcpR;
                     const [bx2, by2] = ep(mSat.x, mSat.y, bcpx, bcpy, mSat.radius);
