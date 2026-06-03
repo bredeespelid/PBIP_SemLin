@@ -404,6 +404,7 @@ class OntologyRenderer {
                 if (sat._grp)   sat._grp.style.display   = 'none';
                 if (sat._spoke) sat._spoke.style.display = 'none';
             });
+            if (node._msrTrunkEl) node._msrTrunkEl.style.display = 'none';
         }
 
         if (node._expandDot) node._expandDot.setAttribute('fill', node.expanded ? node.color : 'white');
@@ -726,6 +727,13 @@ class OntologyRenderer {
                         sat._spoke.setAttribute('y2', (sy - dy / d * sat.radius).toFixed(1));
                     }
                 });
+
+                // Bundled measure trunk+branches: one shared path from the table
+                // center toward the centroid of all visible measure satellites,
+                // then individual branches fan out from that junction point.
+                this._updateMsrTrunk(node);
+            } else if (node._msrTrunkEl) {
+                node._msrTrunkEl.style.display = 'none';
             }
         });
 
@@ -787,6 +795,55 @@ class OntologyRenderer {
                 edge._label.setAttribute('y', (by - 9).toFixed(1));
             }
         });
+    }
+
+    // Builds / updates the single bundled trunk+branch path for a table's measures.
+    // One trunk goes from the table edge toward the centroid of all visible measure
+    // satellites; from that junction each branch fans out to its individual measure.
+    _updateMsrTrunk(node) {
+        const msrSats = node.satellites.filter(s =>
+            s.type === 'measure' && s._grp && s._grp.style.display !== 'none');
+
+        if (msrSats.length === 0) {
+            if (node._msrTrunkEl) node._msrTrunkEl.style.display = 'none';
+            return;
+        }
+
+        if (!node._msrTrunkEl) {
+            node._msrTrunkEl = this._mkSVG('path', {
+                fill: 'none', stroke: node.color,
+                'stroke-width': '1', 'stroke-dasharray': '3,3',
+                opacity: '0.35', 'pointer-events': 'none'
+            });
+            this._spokesLayer.appendChild(node._msrTrunkEl);
+        }
+        node._msrTrunkEl.style.display = '';
+
+        // Junction = centroid of all visible measure positions
+        let jx = 0, jy = 0;
+        msrSats.forEach(s => { jx += s.x; jy += s.y; });
+        jx /= msrSats.length;
+        jy /= msrSats.length;
+
+        // Trunk start: table-node edge facing the junction
+        const tdx = jx - node.x, tdy = jy - node.y;
+        const td  = Math.sqrt(tdx * tdx + tdy * tdy) + 0.001;
+        const tsx = node.x + tdx / td * (node.radius + 3);
+        const tsy = node.y + tdy / td * (node.radius + 3);
+
+        // Single path: M table-edge → L junction, then branches
+        let d = `M${tsx.toFixed(1)},${tsy.toFixed(1)} L${jx.toFixed(1)},${jy.toFixed(1)}`;
+
+        msrSats.forEach(mSat => {
+            const bdx = mSat.x - jx, bdy = mSat.y - jy;
+            const bd  = Math.sqrt(bdx * bdx + bdy * bdy) + 0.001;
+            // Branch endpoint: edge of the measure circle facing back to junction
+            const bex = mSat.x - bdx / bd * mSat.radius;
+            const bey = mSat.y - bdy / bd * mSat.radius;
+            d += ` M${jx.toFixed(1)},${jy.toFixed(1)} L${bex.toFixed(1)},${bey.toFixed(1)}`;
+        });
+
+        node._msrTrunkEl.setAttribute('d', d);
     }
 
     // Arc edges from column (inner ring) to measure (outer ring) satellites.
@@ -940,6 +997,7 @@ class OntologyRenderer {
                     if (sat._spoke) sat._spoke.style.display = 'none';
                 });
                 if (n._expandDot) n._expandDot.setAttribute('fill', 'white');
+                if (n._msrTrunkEl) n._msrTrunkEl.style.display = 'none';
             } else if (vis && n.expanded) {
                 n.satellites.forEach(sat => {
                     if (!sat._grp) return;
@@ -947,6 +1005,8 @@ class OntologyRenderer {
                     sat._grp.style.display   = satVis ? '' : 'none';
                     if (sat._spoke) sat._spoke.style.display = satVis ? '' : 'none';
                 });
+                // Re-evaluate trunk visibility — it depends on visible measure count
+                this._updateMsrTrunk(n);
             }
         });
         this._edges.forEach(e => {
