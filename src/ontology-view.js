@@ -82,6 +82,11 @@ class OntologyRenderer {
         this._createEdgeElements(edgeLayer);
         this._createNodeElements(nodeLayer, container);
         this._setHiddenVisibility(false);
+        // Default on: show report pages + report-used filter
+        if (this._nodes.some(n => n._isReport)) {
+            this._setReportVisibility(true);
+            this._setReportFilter(true);
+        }
 
         container.appendChild(svg);
         this._applyRootTransform();
@@ -1308,7 +1313,8 @@ class OntologyRenderer {
         if (reportCount > 0) {
             const rBtn = document.createElement('button');
             rBtn.className = 'ont-hidden-toggle';
-            rBtn.textContent = `Show report pages (${reportCount})`;
+            rBtn.textContent = this._showReports ? `Hide report pages (${reportCount})` : `Show report pages (${reportCount})`;
+            rBtn.classList.toggle('ont-hidden-toggle--active', this._showReports);
             rBtn.addEventListener('click', () => {
                 const nowShow = !this._showReports;
                 this._setReportVisibility(nowShow);
@@ -1321,7 +1327,8 @@ class OntologyRenderer {
             const totalN = this._nodes.filter(n => !n._isReport && !n._hideNode).length;
             const fBtn = document.createElement('button');
             fBtn.className = 'ont-hidden-toggle';
-            fBtn.textContent = `Filter: report-used only (${usedN}/${totalN})`;
+            fBtn.textContent = this._reportFilter ? `Show all tables` : `Filter: report-used only (${usedN}/${totalN})`;
+            fBtn.classList.toggle('ont-hidden-toggle--active', this._reportFilter);
             fBtn.addEventListener('click', () => {
                 const nowFilter = !this._reportFilter;
                 this._setReportFilter(nowFilter);
