@@ -70,6 +70,8 @@ class App {
         document.getElementById('downloadMDModel').addEventListener('click', (e) => this.downloadMarkdown('model', e.currentTarget));
         document.getElementById('downloadMDVisual').addEventListener('click', (e) => this.downloadMarkdown('visuals', e.currentTarget));
         document.getElementById('buildDashboardBtn').addEventListener('click', (e) => this.buildDashboard(e.currentTarget));
+        const scaffoldBtn = document.getElementById('scaffoldRayfinBtn');
+        if (scaffoldBtn) scaffoldBtn.addEventListener('click', (e) => this.scaffoldRayfin(e.currentTarget));
 
         // Sidebar navigation
         document.querySelectorAll('.sidebar-header').forEach(header => {
@@ -3441,11 +3443,91 @@ class App {
             await htmlWritable.write(htmlContent);
             await htmlWritable.close();
 
+            // Cache the dir handle so scaffoldRayfin() can reuse it
+            this._dashboardDirHandle = dirHandle;
+
+            // Reveal the Scaffold Rayfin sub-button
+            const scaffoldBtn = document.getElementById('scaffoldRayfinBtn');
+            if (scaffoldBtn) {
+                scaffoldBtn.classList.remove('hidden');
+                scaffoldBtn.disabled = false;
+            }
+
             this.showToast('✓ dashboard.html + model-ctx.md skrevet til ' + dirHandle.name, 'success');
 
         } catch (err) {
             this.showToast('Dashboard-bygging feilet: ' + err.message, 'error');
             console.error('buildDashboard error:', err);
+        } finally {
+            if (btn && originalHTML !== null) {
+                btn.innerHTML = originalHTML;
+                btn.disabled = false;
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // SCAFFOLD RAYFIN — Fabric Data App seed
+    // ──────────────────────────────────────────────
+
+    async scaffoldRayfin(btn = null) {
+        if (!this.parsedModel) {
+            this.showToast('Open a PBIP folder first', 'error');
+            return;
+        }
+
+        const originalHTML = btn ? btn.innerHTML : null;
+        if (btn) {
+            btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px">hourglass_top</span> Scaffolding…';
+            btn.disabled = true;
+        }
+
+        try {
+            // Reuse the folder chosen for dashboard, or ask for a new one
+            let dirHandle = this._dashboardDirHandle;
+            if (!dirHandle) {
+                try {
+                    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+                    this._dashboardDirHandle = dirHandle;
+                } catch (err) {
+                    if (err.name === 'AbortError') return;
+                    throw err;
+                }
+            }
+
+            const files = FabricScaffolder.scaffold(
+                this.parsedModel, this.visualData, this.lineageEngine
+            );
+
+            // Write all files — create visuals/ sub-directory on first use
+            let visualsDir = null;
+            for (const [relPath, content] of Object.entries(files)) {
+                if (relPath.startsWith('visuals/')) {
+                    if (!visualsDir) {
+                        visualsDir = await dirHandle.getDirectoryHandle('visuals', { create: true });
+                    }
+                    const fileName = relPath.slice('visuals/'.length);
+                    const fh = await visualsDir.getFileHandle(fileName, { create: true });
+                    const w  = await fh.createWritable();
+                    await w.write(content);
+                    await w.close();
+                } else {
+                    const fh = await dirHandle.getFileHandle(relPath, { create: true });
+                    const w  = await fh.createWritable();
+                    await w.write(content);
+                    await w.close();
+                }
+            }
+
+            const fileCount = Object.keys(files).length;
+            this.showToast(
+                `✓ Rayfin-prosjekt satt opp (${fileCount} filer) i ${dirHandle.name} — kjør: bun install && bun run dev`,
+                'success'
+            );
+
+        } catch (err) {
+            this.showToast('Rayfin scaffold feilet: ' + err.message, 'error');
+            console.error('scaffoldRayfin error:', err);
         } finally {
             if (btn && originalHTML !== null) {
                 btn.innerHTML = originalHTML;

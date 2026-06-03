@@ -58,22 +58,55 @@ Use the browser tools to:
 
 ## When the user says "jeg er ferdig"
 
-This is the trigger to scaffold a Rayfin Fabric Data App from the prototype dashboard.
+This means they are done iterating on `dashboard.html` and want to deploy to Fabric.
 
-1. Ask for the Fabric workspace name if not already known.
-2. Run in the terminal:
+**Step 1 — Scaffold the Rayfin project (no terminal yet)**
+
+Tell the user:
+> Go back to the PBIP SemLin browser app and click **Scaffold Rayfin** (the button that appeared under "Bygg dashboard" after the dashboard was built).
+> The app will write the complete Rayfin project into the same folder — `package.json`, `fabric.yaml`, `AGENTS.md`, `index.ts`, and a `.dax` + `.json` + `.ts` triple for each top measure.
+
+**Step 2 — First-time setup**
+
+After the scaffold toast confirms success, tell the user to open a terminal in VS Code pointed at their dashboard folder and run:
 
 ```bash
-bun create @microsoft/rayfin@latest -- "<ModelName>" --template dataapp --workspace "<WorkspaceName>"
+bun install
+bun run dev
 ```
 
-3. After scaffolding, seed the project:
-   - `fabric.yaml` — workspace + semantic model connection
-   - `AGENTS.md` — point to `model-ctx.md` as model context
-   - One `.dax` + `.json` + `.ts` triple per top-5 measures by visual coverage
-   - **Use only field and measure names from `model-ctx.md`** — never invent names
+This starts a local preview at `localhost:5173` — live queries against the semantic model.
 
-4. Tell the user: `bun run dev` to start local preview on localhost:5173, `bunx rayfin up` to deploy.
+**Step 3 — Deploy**
+
+When they are ready:
+```bash
+bunx rayfin up
+```
+
+**What the scaffold generates:**
+- `fabric.yaml` — update `workspace` and `dataset` fields before `bun run dev`
+- `AGENTS.md` — points Copilot to `model-ctx.md` for all field names
+- `visuals/{MeasureName}.dax` — DAX query with `<YEAR>` and `<FILTER>` placeholders
+- `visuals/{MeasureName}.json` — D3 bar chart spec (type, encoding, theme, drilldown config)
+- `visuals/{MeasureName}.ts` — TypeScript wiring with `query()` method
+
+## D3 patterns for visual development
+
+When helping the user extend visuals in the generated Rayfin project:
+
+**Drilldown** — `d3.hierarchy()`, one `.dax` per level, `<LEVEL>` placeholder:
+```typescript
+// In .ts file: switch .dax content based on current drill depth
+const daxFiles = { Year: yearDax, Quarter: quarterDax, Month: monthDax };
+```
+
+**Matrix / pivot** — `d3.rollup()` for aggregation, expanded-row state in `.ts`:
+```typescript
+const matrix = d3.rollup(rows, v => d3.sum(v, d => d.Value), d => d.Row, d => d.Col);
+```
+
+**Cross-visual filtering** — replace `<FILTER>` placeholder with a `KEEPFILTERS` expression built from click state in `.ts`.
 
 ## Constraints
 

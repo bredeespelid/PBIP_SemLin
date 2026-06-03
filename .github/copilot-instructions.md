@@ -127,11 +127,34 @@ Frø Rayfin-prosjektet med:
 Lokal utvikling: `bun run dev` (localhost:5173, spørrer live modell)
 Deploy: `bunx rayfin up`
 
+### "Scaffold Rayfin"-knappen
+
+Etter at `buildDashboard()` lykkes vises en **Scaffold Rayfin**-underknapp i UI-et.
+Klikk på den for å skrive hele Rayfin-prosjektet direkte til den valgte mappen — ingen terminal nødvendig ennå.
+Etter scaffold: `bun install && bun run dev` i den genererte mappen starter lokal preview på localhost:5173.
+
+### D3 drilldown og matriser
+
+Alle tre scaffold-filene støtter avanserte D3-mønstre:
+
+**Drilldown** (`d3.hierarchy()`):
+- Lag én `.dax`-fil per nivå med `<LEVEL>`-placeholder (f.eks. Year → Quarter → Month)
+- `.ts`-filen håndterer klikk-state og bytter `.dax`-fil ved drill
+- `.json`-spec: `"drilldown": { "enabled": true, "levels": ["Year","Quarter","Month"], "placeholder": "<LEVEL>" }`
+
+**Matrise / pivot** (`d3.rollup()`):
+- `d3.rollup(data, v => d3.sum(v, d => d.Value), d => d.Row, d => d.Col)` for aggregering
+- Ekspandert-rad-state holdes i `.ts`-filen
+- DAX: `SUMMARIZECOLUMNS(RowDim, ColDim, "Value", [Measure])` — ingen pivot-funksjon nødvendig
+
+**Kryssfiltrering mellom visuals**: bytt ut `<FILTER>`-placeholder med en `KEEPFILTERS(CALCULATETABLE(...))`-expression generert i `.ts`.
+
 ### Kildekode
 
 ```
 src/dashboard-generator.js   ← generateModelContext() + generateDashboard()
-src/app.js                   ← buildDashboard() — File System Access API write
+src/fabric-scaffolder.js     ← FabricScaffolder.scaffold() — genererer alle Rayfin-filer
+src/app.js                   ← buildDashboard() + scaffoldRayfin() — File System Access API write
 ```
 
 Alle nye kildefiler legges i `src/` og lastes via `<script>` i `index.html` i riktig avhengighetsrekkefølge.
