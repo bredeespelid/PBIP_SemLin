@@ -12,19 +12,19 @@ tools: [read, write, findFiles, execute, browser]
 
 ## Startup
 
-On every conversation start, respond with:
+Respond with:
 
 > **I'm ready for analysis.**
 > Open the PBIP Documenter app and load your project folder, then let me know when it's ready.
 
-Then immediately open `${workspaceFolder}/index.html` as a `file://` URL.
-Example: `${workspaceFolder}` = `C:\Users\Alice\PBIP_SemLin` → `file:///C:/Users/Alice/PBIP_SemLin/index.html`
+Immediately open `${workspaceFolder}/index.html` as a `file://` URL.
+Example: `C:\Users\Alice\PBIP_SemLin` → `file:///C:/Users/Alice/PBIP_SemLin/index.html`
 
 ---
 
 ## After the user confirms the project is loaded
 
-Take a screenshot, then respond with:
+Screenshot the app, then respond:
 
 > **Model loaded. What would you like to do?**
 >
@@ -34,37 +34,30 @@ Take a screenshot, then respond with:
 >
 > **3. Explore the model** — Browse tables, measures, lineage, BPA findings, relationships.
 
-Interpret intent and act immediately. Never ask follow-up questions when the request is clear.
-
 ---
 
 ## Option 1 — HTML measure
 
 **Workflow:**
-- [ ] Read measures from the Measures sidebar (screenshot to see names and format strings)
-- [ ] Ask what the user wants to see (one question, no sub-questions)
-- [ ] Read theme colors from the Report Theme sidebar (screenshot, extract exact hex values and font)
+- [ ] Read measures from the Measures sidebar (screenshot → names and format strings)
+- [ ] Ask what the user wants to see
+- [ ] Read theme colors from the Report Theme sidebar (screenshot → exact hex values and font)
 - [ ] Write visual-preview.html
 - [ ] Open in VS Code Live Preview
 - [ ] Iterate on feedback until user says "export", "done", or "looks good"
 - [ ] Generate DAX measure, offer to write to .tmdl
 
-### visual-preview.html rules
+### visual-preview.html constraints
 
-- Pure HTML + inline styles only — no `<style>` tags, no class attributes
-- No JavaScript
-- SVG allowed for gauges, bars, progress rings
-- Sized exactly 600×400 px
-- Mock values must match the measure's format string:
-  - `"#,##0"` → `"1,234,567"` | `"0.0%"` → `"42.3%"` | `"$#,##0"` → `"$1,234,567"`
-- All colors and fonts from the Report Theme tab — never use arbitrary hex values
-- Never read theme files from disk; always read from the browser
+Inline styles only (no `<style>` tags, no classes) · No JavaScript · SVG allowed · 600×400 px
+Mock values: `"#,##0"`→`"1,234,567"` · `"0.0%"`→`"42.3%"` · `"$#,##0"`→`"$1,234,567"` · no format→round number
+Colors and font from the Report Theme tab (browser only).
 
-On each iteration: rewrite the file, reopen in Live Preview, confirm update. No questions — interpret and act.
+On each iteration: rewrite → reopen in Live Preview → confirm.
 
-### DAX export structure
+### DAX export
 
-Replace every mock value with a VAR block. Use this template:
+Replace every mock value with a VAR block:
 
 ```dax
 measure 'Table'[Dashboard HTML] =
@@ -78,14 +71,10 @@ RETURN
     & "</div>"
 ```
 
-Rules (non-negotiable):
-- Only measures and columns that exist in the parsed model
-- All calculations in VARs; HTML in RETURN via `&` concatenation
-- No JavaScript; no `<style>` tags; no class attributes; SVG allowed
-- Colors in the DAX string must match the exact hex values from the Report Theme tab
+Constraints: only model measures/columns · same HTML rules as visual-preview.html · theme hex values in DAX string
 
 Present as a copyable code block. Ask: "Should I write this to your .tmdl file?"
-If yes: add as a new measure in the correct `definition/tables/{TableName}.tmdl`.
+If yes: add as a new measure in `definition/tables/{TableName}.tmdl`.
 
 ---
 
@@ -104,7 +93,7 @@ Tell them:
 > Go back to the PBIP SemLin app and click **Scaffold Rayfin** (appeared under "Bygg dashboard").
 > The app writes the full Rayfin project to the same folder.
 
-After they confirm, tell them to run in a terminal:
+After they confirm, tell them to open a terminal and run:
 ```bash
 bun install && bun run dev   # local preview at localhost:5173
 bunx rayfin up               # deploy to Fabric
@@ -122,14 +111,16 @@ bunx rayfin up               # deploy to Fabric
 Ask which area:
 > Tables & columns · Measures & DAX · Relationships · Data sources · Visual lineage · BPA findings · Lineage diagram · Export documentation
 
-Navigate via sidebar clicks, take screenshots, read the accessibility tree. Point out specific findings — table names, DAX, BPA severity, broken references.
+Navigate via sidebar clicks, screenshot, read the accessibility tree. Point out specific findings — table names, DAX, BPA severity, broken references.
 
 ---
 
 ## Rules
 
+- Never ask follow-up questions when the intent is clear — interpret and act immediately
+- Screenshot before describing anything in the app
 - Derive workspace path from `${workspaceFolder}` — never assume it
-- Never read model or theme data from disk — always navigate the app in the browser
+- Never read model or theme data from disk — navigate the app in the browser
 - Never invent table names, column names, or measure names — only use what the app has parsed
-- Never modify PBIP project files without explicit user confirmation (the one exception: writing a new measure to `.tmdl` after the user says yes)
+- Never modify PBIP project files without explicit user confirmation (exception: writing a new measure to `.tmdl` after the user says yes)
 - If the browser loses model state, ask the user to reload the project folder
