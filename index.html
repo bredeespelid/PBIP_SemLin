@@ -283,6 +283,13 @@
                         Visual Lineage
                     </div>
                 </div>
+                <div class="sidebar-section" id="sidebarFieldUsageSection">
+                    <div class="sidebar-header" data-section="field-usage" tabindex="0" role="button">
+                        <span class="material-symbols-outlined">rule</span>
+                        Field Usage
+                        <span class="sidebar-badge" id="sidebarUnusedCount">0</span>
+                    </div>
+                </div>
                 <div class="sidebar-section hidden" id="sidebarDynamicSection">
                     <div class="sidebar-header" data-section="dynamic-features" tabindex="0" role="button">
                         <span class="material-symbols-outlined">dynamic_form</span>
@@ -633,6 +640,20 @@
                         </div>
                     </div>
                     <div id="lineageDetailPanel" class="lineage-detail-panel hidden"></div>
+                </div>
+
+                <!-- Field Usage -->
+                <div id="view-field-usage" class="section-view content-panel">
+                    <h2>Field Usage</h2>
+                    <p class="section-subtitle">Which columns are actually used — in visuals, measures, or relationships.</p>
+                    <div id="fieldUsageToolbar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+                        <button type="button" class="fu-filter-btn active" data-filter="all">All</button>
+                        <button type="button" class="fu-filter-btn" data-filter="unused">Unused only</button>
+                        <button type="button" class="fu-filter-btn" data-filter="visuals">In visuals</button>
+                        <button type="button" class="fu-filter-btn" data-filter="dax">In DAX only</button>
+                    </div>
+                    <div id="fieldUsageSummary" style="margin-bottom:16px"></div>
+                    <div id="fieldUsageContent"></div>
                 </div>
 
                 <!-- Dynamic Features -->
