@@ -9,7 +9,7 @@ description: >
 target: vscode
 tools: [read, write, findFiles, browser]
 agents: []
-model: claude-sonnet-4-5
+model: claude-sonnet-4-6
 argument-hint: "Load the PBIP Documenter app first, then describe what you want to do"
 ---
 
