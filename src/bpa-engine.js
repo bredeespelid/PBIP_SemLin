@@ -152,7 +152,7 @@ const BPARules = [
       const findings = [];
       const numTypes = ['Int64', 'Double', 'Decimal', 'DateTime'];
       model.tables.forEach(t => {
-        if (t._isAutoDate) return;
+        if (t._isAutoDate || t.isHidden) return;
         t.columns.forEach(c => {
           if (!c.isHidden && numTypes.includes(c.dataType) && (!c.formatString || c.formatString.trim() === '')) {
             findings.push({
@@ -177,6 +177,7 @@ const BPARules = [
     "evalJS": (model) => {
       const findings = [];
       model.tables.forEach(t => {
+        if (t._isAutoDate || t.isHidden) return;
         t.measures.forEach(m => {
           if (!m.isHidden && (!m.formatString || m.formatString.trim() === '')) {
             findings.push({
@@ -226,7 +227,7 @@ const BPARules = [
       const findings = [];
       const numTypes = ['Int64', 'Double', 'Decimal'];
       model.tables.forEach(t => {
-        if (t._isAutoDate) return;
+        if (t._isAutoDate || t.isHidden) return;
         t.columns.forEach(c => {
           if (!c.isHidden && numTypes.includes(c.dataType) && c.summarizeBy && c.summarizeBy.toLowerCase() !== 'none') {
             findings.push({
@@ -253,6 +254,7 @@ const BPARules = [
       const relColumns = new Set(model.relationships.map(r => `${r.fromTable}|${r.fromColumn}`));
       
       model.tables.forEach(t => {
+        if (t._isAutoDate || t.isHidden) return;
         t.columns.forEach(c => {
           if (!c.isHidden && relColumns.has(`${t.name}|${c.name}`)) {
             findings.push({
@@ -277,7 +279,7 @@ const BPARules = [
     "evalJS": (model) => {
       const findings = [];
       model.tables.forEach(t => {
-        if (t._isAutoDate) return;
+        if (t._isAutoDate || t.isHidden) return;
         if (t.name[0] !== t.name[0].toUpperCase()) {
           findings.push({ table: t.name, object: t.name, type: 'Table', message: `Table [${t.name}] starts with a lowercase letter.` });
         }
@@ -340,7 +342,7 @@ const BPARules = [
     "evalJS": (model) => {
       const findings = [];
       model.tables.forEach(t => {
-        if (t._isAutoDate) return;
+        if (t._isAutoDate || t.isHidden) return;
         t.measures.forEach(m => {
           if (!m.isHidden && !m.displayFolder) {
             findings.push({ table: t.name, object: m.name, type: 'Measure', message: `Measure [${m.name}] is visible but has no display folder.` });
@@ -361,7 +363,7 @@ const BPARules = [
       const findings = [];
       const isCamelCase = (name) => /[a-z][A-Z]/.test(name);
       model.tables.forEach(t => {
-        if (t._isAutoDate) return;
+        if (t._isAutoDate || t.isHidden) return;
         if (isCamelCase(t.name)) {
           findings.push({ table: t.name, object: t.name, type: 'Table', message: `Table [${t.name}] uses camelCase naming.` });
         }
@@ -385,7 +387,7 @@ const BPARules = [
       const findings = [];
       const isCamelCase = (name) => /[a-z][A-Z]/.test(name);
       model.tables.forEach(t => {
-        if (t._isAutoDate) return;
+        if (t._isAutoDate || t.isHidden) return;
         t.columns.forEach(c => {
           if (!c.isHidden && isCamelCase(c.name)) {
             findings.push({ table: t.name, object: c.name, type: 'Column', message: `Column [${c.name}] uses camelCase naming.` });
