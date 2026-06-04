@@ -3775,3 +3775,71 @@ tr:hover {
 [data-theme="dark"] .fu-tag-rel    { background: #0d1f33; color: #90caf9; }
 [data-theme="dark"] .fu-tag-sort   { background: #0d2010; color: #a5d6a7; }
 [data-theme="dark"] .fu-filter-btn.active { background: var(--primary); }
+
+/* ── WORKSPACE TAB BAR ── */
+.ws-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+}
+.ws-tab-bar::-webkit-scrollbar { display: none; }
+
+.ws-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px 5px 12px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    font-size: 12px;
+    font-weight: 500;
+    background: transparent;
+    cursor: pointer;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.ws-tab.active {
+    background: var(--card-bg);
+    border-color: var(--border);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+.ws-tab:hover:not(.active):not(.ws-tab-add) {
+    background: var(--bg-hover, rgba(0,0,0,0.05));
+    color: var(--text-primary);
+}
+.ws-tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    font-size: 13px;
+    line-height: 1;
+    opacity: 0.45;
+    margin-left: 2px;
+    transition: opacity 0.1s, background 0.1s;
+}
+.ws-tab:hover .ws-tab-close,
+.ws-tab.active .ws-tab-close { opacity: 0.7; }
+.ws-tab-close:hover { opacity: 1 !important; background: rgba(229,57,53,0.12); color: #e53935; }
+
+.ws-tab-add {
+    border: 1px dashed var(--border);
+    color: var(--text-secondary);
+    padding: 5px 10px;
+    margin-left: 4px;
+}
+.ws-tab-add:hover { border-color: var(--primary); color: var(--primary); background: transparent; }
+
+[data-theme="dark"] .ws-tab.active { background: #1e2431; }
+[data-theme="dark"] .ws-tab-close:hover { background: rgba(229,57,53,0.2); }

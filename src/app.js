@@ -8,13 +8,13 @@ class App {
         this.folderHandle = null;
         this.semanticModelHandle = null;
         this.reportHandle = null;
-        this.parsedModel = null;
-        this.visualData = null;
-        this.measureRefs = null;
+
+        // ── Multi-workspace storage ──
+        this._workspaces = [];   // [{ id, name, parsedModel, visualData, ... }]
+        this._activeWsIdx = -1; // index into _workspaces for the current view
+
         this.docGenerator = null;
         this.diagramRenderer = null;
-        this.lineageEngine = null;
-        this.lineageDiagramRenderer = null;
         this._diagramRendered = false;
         this._detailedERDRendered = false;
         this._lineageRendered = false;
@@ -25,12 +25,37 @@ class App {
         this._dynamicPromptShown = false;
         this._milestoneDismissed = false;
 
-        this.themeData = null;
-        this.ontologyRenderer = null;
         this.parseErrors = [];
 
         this.init();
     }
+
+    // ── Per-workspace property accessors ──────────────────────────────
+    _ws() { return this._workspaces[this._activeWsIdx] ?? null; }
+
+    get parsedModel()           { return this._ws()?.parsedModel ?? null; }
+    set parsedModel(v)          { const w = this._ws(); if (w) w.parsedModel = v; }
+
+    get visualData()            { return this._ws()?.visualData ?? null; }
+    set visualData(v)           { const w = this._ws(); if (w) w.visualData = v; }
+
+    get measureRefs()           { return this._ws()?.measureRefs ?? null; }
+    set measureRefs(v)          { const w = this._ws(); if (w) w.measureRefs = v; }
+
+    get lineageEngine()         { return this._ws()?.lineageEngine ?? null; }
+    set lineageEngine(v)        { const w = this._ws(); if (w) w.lineageEngine = v; }
+
+    get lineageDiagramRenderer(){ return this._ws()?.lineageDiagramRenderer ?? null; }
+    set lineageDiagramRenderer(v){ const w = this._ws(); if (w) w.lineageDiagramRenderer = v; }
+
+    get bpaResults()            { return this._ws()?.bpaResults ?? null; }
+    set bpaResults(v)           { const w = this._ws(); if (w) w.bpaResults = v; }
+
+    get themeData()             { return this._ws()?.themeData ?? null; }
+    set themeData(v)            { const w = this._ws(); if (w) w.themeData = v; }
+
+    get ontologyRenderer()      { return this._ws()?.ontologyRenderer ?? null; }
+    set ontologyRenderer(v)     { const w = this._ws(); if (w) w.ontologyRenderer = v; }
 
     init() {
         // Check browser support
@@ -592,6 +617,138 @@ class App {
     // STATE RESET
     // ──────────────────────────────────────────────
 
+    // ── WORKSPACE METHODS ────────────────────────────────────────────
+
+    _renderWorkspaceTabs() {
+        const bar = document.getElementById('workspaceTabBar');
+        if (!bar) return;
+
+        if (this._workspaces.length === 0) {
+            bar.classList.add('hidden');
+            return;
+        }
+        bar.classList.remove('hidden');
+
+        let html = '';
+        this._workspaces.forEach((ws, idx) => {
+            const active = idx === this._activeWsIdx ? ' active' : '';
+            html += `<button class="ws-tab${active}" data-ws-idx="${idx}" title="${this._esc(ws.name)}">
+                <span class="material-symbols-outlined" style="font-size:14px;flex-shrink:0">dataset</span>
+                ${this._esc(ws.name.length > 22 ? ws.name.slice(0, 20) + '…' : ws.name)}
+                <span class="ws-tab-close" data-ws-close="${idx}" title="Close">&times;</span>
+            </button>`;
+        });
+        html += `<button class="ws-tab ws-tab-add" id="wsAddBtn" title="Open another workspace">
+            <span class="material-symbols-outlined" style="font-size:15px">add</span>
+        </button>`;
+        bar.innerHTML = html;
+
+        // Bind tab clicks
+        bar.querySelectorAll('.ws-tab[data-ws-idx]').forEach(btn => {
+            btn.addEventListener('click', e => {
+                const closeBtn = e.target.closest('[data-ws-close]');
+                if (closeBtn) {
+                    e.stopPropagation();
+                    this._closeWorkspace(parseInt(closeBtn.dataset.wsClose, 10));
+                    return;
+                }
+                const idx = parseInt(btn.dataset.wsIdx, 10);
+                if (idx !== this._activeWsIdx) this._switchWorkspace(idx);
+            });
+        });
+
+        // "Add workspace" → open folder picker
+        bar.querySelector('#wsAddBtn')?.addEventListener('click', () => this.openFolder());
+    }
+
+    _switchWorkspace(idx) {
+        if (idx < 0 || idx >= this._workspaces.length) return;
+        this._activeWsIdx = idx;
+
+        // Reset lazy-render flags (don't touch workspace data)
+        this._diagramRendered = false;
+        this._detailedERDRendered = false;
+        this._lineageRendered = false;
+        this._fieldDiagramRendered = false;
+        this._bpaRendered = false;
+        this._fuFilterBound = false;
+
+        // Clear diagram SVGs but keep toolbar controls
+        const DIAGRAM_CONTAINERS = [
+            'relationshipsDiagram', 'detailedERDContainer',
+            'lineageDiagramContainer', 'lineageTraceDiagram',
+            'lineageImpactDiagram', 'lineageColumnImpactDiagram',
+            'lineageSourceTraceDiagram', 'visualUsageByField', 'visualUsageByVisual'
+        ];
+        for (const id of DIAGRAM_CONTAINERS) {
+            const el = document.getElementById(id);
+            if (!el) continue;
+            Array.from(el.children).forEach(child => {
+                if (!child.classList.contains('diagram-controls')) child.remove();
+            });
+        }
+
+        // Clear lineage dropdowns so they repopulate for new workspace
+        for (const id of ['lineageVisualSelect', 'lineageMeasureSelect', 'lineageTableSelect', 'lineageColumnSelect', 'lineagePhysicalTableSelect']) {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = '';
+        }
+
+        // Clear milestone banners from previous workspace
+        document.querySelectorAll('#mainContent .milestone-banner').forEach(b => b.remove());
+
+        const ws = this._workspaces[idx];
+
+        // Restore workspace-specific parse errors
+        this.parseErrors = ws?.parseErrors || [];
+
+        // Update folder name display
+        const folderNameEl = document.getElementById('folderName');
+        if (folderNameEl && ws) folderNameEl.textContent = ws.name;
+
+        // Show/hide warning banner based on new workspace's errors
+        const banner = document.getElementById('warningBanner');
+        if (banner) {
+            if (ws?.parseErrors?.length > 0) {
+                document.getElementById('warningBannerText').textContent =
+                    `Parsed with ${ws.parseErrors.length} warning${ws.parseErrors.length !== 1 ? 's' : ''} — some items may be incomplete`;
+                banner.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+            }
+        }
+
+        // Re-render UI for new workspace
+        this.updateStats();
+        this.buildSidebar();
+        this.renderOverview();
+        this.showSection('overview');
+        this._renderWorkspaceTabs();
+    }
+
+    _closeWorkspace(idx) {
+        if (idx < 0 || idx >= this._workspaces.length) return;
+        this._workspaces.splice(idx, 1);
+
+        if (this._workspaces.length === 0) {
+            // No workspaces left — return to landing
+            this._activeWsIdx = -1;
+            document.getElementById('appBody').classList.add('hidden');
+            document.getElementById('statsBar').classList.add('hidden');
+            document.getElementById('downloadBar').classList.add('hidden');
+            document.getElementById('folderInfo').classList.add('hidden');
+            document.getElementById('landingSection').classList.remove('hidden');
+            document.getElementById('workspaceTabBar').classList.add('hidden');
+            return;
+        }
+
+        // Switch to adjacent tab
+        const newIdx = Math.min(idx, this._workspaces.length - 1);
+        this._switchWorkspace(newIdx);
+    }
+
+    // ── END WORKSPACE METHODS ─────────────────────────────────────────
+
     _resetState() {
         // Lazy-render flags
         this._diagramRendered = false;
@@ -652,6 +809,21 @@ class App {
     // ──────────────────────────────────────────────
 
     async parseModel() {
+        // ── Workspace management ─────────────────────────────────────
+        // Re-use existing workspace if same folder; otherwise create new
+        const folderKey = this.semanticModelHandle?.name || String(Date.now());
+        let wsIdx = this._workspaces.findIndex(w => w._folderKey === folderKey);
+        if (wsIdx === -1) {
+            this._workspaces.push({
+                id: Date.now(), _folderKey: folderKey, name: folderKey,
+                parsedModel: null, visualData: null, measureRefs: null,
+                lineageEngine: null, lineageDiagramRenderer: null,
+                bpaResults: null, themeData: null, ontologyRenderer: null
+            });
+            wsIdx = this._workspaces.length - 1;
+        }
+        this._activeWsIdx = wsIdx;
+
         this._resetState();
         this.showLoading(true, 'Reading TMDL files...');
 
@@ -665,6 +837,8 @@ class App {
             const parser = new TMDLParser();
             this.parsedModel = parser.parseAll(files);
             this.parseErrors = parser.errors;
+            const ws2 = this._workspaces[this._activeWsIdx];
+            if (ws2) ws2.parseErrors = this.parseErrors;
 
             // Extract DAX references
             this.measureRefs = parser.extractAllReferences();
@@ -704,12 +878,17 @@ class App {
             // Run Best Practice Analyzer (BPA)
             this.bpaResults = BPAEngine.evaluate(this.parsedModel);
 
+            // Store workspace name from parsed model
+            const ws = this._workspaces[this._activeWsIdx];
+            if (ws) ws.name = this.parsedModel.database?.name || this.parsedModel.model?.name || ws._folderKey;
+
             // Update UI
             this.updateStats();
             this.buildSidebar();
             this.renderOverview();
             this._navigateByPersona();
             this.showSection('overview');
+            this._renderWorkspaceTabs();
 
             this._track('Model Parsed', { tables: this.parsedModel.tables.length, measures: this.parsedModel.tables.reduce((s, t) => s + t.measures.length, 0) });
 
@@ -800,6 +979,22 @@ class App {
             }
             const data = await resp.json();
 
+            // Create/activate demo workspace
+            const demoName = data._meta?.modelName || 'Contoso (demo)';
+            const demoKey = `demo:${demoName}`;
+            let demoIdx = this._workspaces.findIndex(w => w._folderKey === demoKey);
+            if (demoIdx === -1) {
+                this._workspaces.push({
+                    id: Date.now(), _folderKey: demoKey, name: demoName,
+                    parsedModel: null, visualData: null, measureRefs: null,
+                    lineageEngine: null, lineageDiagramRenderer: null,
+                    bpaResults: null, themeData: null, ontologyRenderer: null
+                });
+                demoIdx = this._workspaces.length - 1;
+            }
+            this._activeWsIdx = demoIdx;
+            this._resetState();
+
             // Inject parsed data
             this.parsedModel = data.parsedModel;
             this.measureRefs = data.measureRefs || {};
@@ -831,6 +1026,7 @@ class App {
             this.buildSidebar();
             this.renderOverview();
             this.showSection('overview');
+            this._renderWorkspaceTabs();
 
             this._track('Demo Loaded');
 
@@ -842,7 +1038,7 @@ class App {
             // Show folder info with demo label
             document.getElementById('folderInfo').classList.remove('hidden');
             const folderNameEl = document.getElementById('folderName');
-            if (folderNameEl) folderNameEl.textContent = data._meta?.modelName || 'Contoso (demo)';
+            if (folderNameEl) folderNameEl.textContent = demoName;
 
             // Time-saved calculator in download bar
             this._showTimeSaved();
