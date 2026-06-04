@@ -835,7 +835,7 @@ class LineageDiagramRenderer {
         }
 
         // Draw edges for full lineage
-        if (columns.length === 4 && columns[0].label === 'Data Sources') {
+        if (columns[0].label === 'Data Sources' && columns[columns.length - 1].label === 'Pages') {
             this._drawFullLineageEdges(svg, layout, columns);
         }
 
