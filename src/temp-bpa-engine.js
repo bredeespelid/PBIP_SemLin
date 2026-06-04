@@ -57,10 +57,12 @@ const BPARules = [
         
         objects.forEach(obj => {
           if (!obj.expression) return;
-          // Strip comments first to prevent false positives from URL comments or comment lines
+          // Strip comments and string literals to prevent false positives
+          // (string literals can contain HTML like </div> which contains '/')
           const cleanExpr = obj.expression
             .replace(/\/\/.*/g, '')
-            .replace(/\/\*[\s\S]*?\*\//g, '');
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/"(?:[^"]|"")*"/g, '""');
 
           if (cleanExpr.includes('/') && !/\/\s*\d+(\.\d+)?\b/.test(cleanExpr) && !/[a-zA-Z0-9_ -]+\/[a-zA-Z0-9_ -]+\.md/.test(cleanExpr)) {
             findings.push({
