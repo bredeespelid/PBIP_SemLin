@@ -4256,8 +4256,10 @@ svg{max-width:100%;height:auto}
     }
 
     _buildMeasureUsageMap() {
-        // "TableName|MeasureName" → { visual, visualCount, pages[] }
+        // "TableName|MeasureName" → { visual, visualCount, pages[], usedByMeasure }
         const usage = new Map();
+
+        // 1. Direct visual usage
         if (this.visualData?.fieldUsageMap) {
             for (const [key, usages] of Object.entries(this.visualData.fieldUsageMap)) {
                 const parts = key.split('|');
@@ -4265,12 +4267,36 @@ svg{max-width:100%;height:auto}
                 const [, table, name] = parts;
                 if (!table || !name) continue;
                 usage.set(`${table}|${name}`, {
-                    visual: true,
+                    visual: true, usedByMeasure: false,
                     visualCount: usages.length,
                     pages: [...new Set(usages.map(u => u.pageName))]
                 });
             }
         }
+
+        // 2. Propagate: measures called by visual measures are also "used"
+        //    BFS through the forward call graph (caller → callee)
+        const measureTable = new Map(); // measureName → tableName
+        for (const t of (this.parsedModel?.tables || [])) {
+            for (const m of t.measures) measureTable.set(m.name, t.name);
+        }
+
+        const queue = [...usage.keys()];
+        const visited = new Set(queue);
+        while (queue.length > 0) {
+            const k = queue.shift();
+            const callerName = k.split('|')[1];
+            for (const callee of (this.measureRefs?.[callerName]?.measureRefs || [])) {
+                const calleeTable = measureTable.get(callee);
+                if (!calleeTable) continue;
+                const calleeKey = `${calleeTable}|${callee}`;
+                if (visited.has(calleeKey)) continue;
+                visited.add(calleeKey);
+                usage.set(calleeKey, { visual: false, usedByMeasure: true, visualCount: 0, pages: [] });
+                queue.push(calleeKey);
+            }
+        }
+
         return usage;
     }
 
@@ -4302,12 +4328,14 @@ svg{max-width:100%;height:auto}
         }
 
         // ── Measure summary stats ──
-        let mTotal = 0, mUnused = 0;
+        let mTotal = 0, mUnused = 0, mIndirect = 0;
         for (const t of this.parsedModel.tables) {
             if (t._isAutoDate) continue;
             for (const m of t.measures) {
                 mTotal++;
-                if (!msrUsage.has(`${t.name}|${m.name}`)) mUnused++;
+                const mu = msrUsage.get(`${t.name}|${m.name}`);
+                if (!mu) mUnused++;
+                else if (mu.usedByMeasure && !mu.visual) mIndirect++;
             }
         }
 
@@ -4321,6 +4349,7 @@ svg{max-width:100%;height:auto}
             <div class="fu-summary-stat" style="color:var(--text-secondary)">${total} cols total</div>
             <div style="width:1px;background:var(--border);margin:0 4px"></div>
             <div class="fu-summary-stat"><span class="fu-dot fu-dot-unused"></span><strong>${mUnused}</strong>&nbsp;unused measures</div>
+            <div class="fu-summary-stat"><span class="fu-dot fu-dot-dax"></span><strong>${mIndirect}</strong>&nbsp;called by measure</div>
             <div class="fu-summary-stat" style="color:var(--text-secondary)">${mTotal} measures total</div>
         </div>`;
 
@@ -4334,16 +4363,19 @@ svg{max-width:100%;height:auto}
                     if (t._isAutoDate || t.measures.length === 0) continue;
                     for (const m of t.measures) {
                         const mu = msrUsage.get(`${t.name}|${m.name}`);
-                        const mUnusedFlag = !mu;
+                        const mUnusedFlag = !mu; // truly unused = not in visuals AND not called by any visual measure
                         if (filter === 'unused' && !mUnusedFlag) continue;
                         if (filter === 'measures') { /* show all */ }
 
                         let tags = '';
                         if (mUnusedFlag) {
-                            tags = `<span class="fu-tag fu-tag-unused">⚠ not in any visual</span>`;
+                            tags = `<span class="fu-tag fu-tag-unused">⚠ not used anywhere</span>`;
+                        } else if (mu.usedByMeasure && !mu.visual) {
+                            tags = `<span class="fu-tag fu-tag-dax">🧮 called by measure</span>`;
                         } else {
                             tags = `<span class="fu-tag fu-tag-visual">📊 ${mu.visualCount} visual(s)</span>`;
                             if (mu.pages?.length) tags += `<span class="fu-tag fu-tag-sort" style="background:#e8eaf6;color:#283593">${mu.pages.join(', ')}</span>`;
+                            if (mu.usedByMeasure) tags += `<span class="fu-tag fu-tag-dax">+ called by measure</span>`;
                         }
                         if (m.isHidden) tags += `<span class="fu-tag fu-tag-hidden">hidden</span>`;
                         mRows += `<div class="fu-col-row${mUnusedFlag ? ' unused' : ''}">
@@ -4358,7 +4390,7 @@ svg{max-width:100%;height:auto}
                         <div class="fu-table-header" data-fu-table="__measures__">
                             <span class="material-symbols-outlined" style="font-size:16px;color:#f9a825">calculate</span>
                             <span>Measures</span>
-                            ${mUnused > 0 ? `<span style="margin-left:8px;background:#ffebee;color:#c62828;padding:1px 7px;border-radius:10px;font-size:11px">${mUnused} not in visuals</span>` : ''}
+                            ${mUnused > 0 ? `<span style="margin-left:8px;background:#ffebee;color:#c62828;padding:1px 7px;border-radius:10px;font-size:11px">${mUnused} unused</span>` : ''}
                             <span style="color:var(--text-secondary);font-size:11px;font-weight:400">${mTotal} total</span>
                             <span class="fu-table-toggle">▶</span>
                         </div>
