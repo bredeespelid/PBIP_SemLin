@@ -158,6 +158,7 @@ class TMDLParser {
         let pendingDescription = null;
         let baseIndent = 0;
         let expressionIndent = 0;
+        let exprContentIndent = -1; // indent of first non-empty expression line; -1 = not yet seen
         let inBacktickBlock = false;
 
         for (let i = 0; i < lines.length; i++) {
@@ -217,6 +218,7 @@ class TMDLParser {
                     // Save previous object
                     this._finishCurrentObject(state, currentObject, currentExpression, table);
                     currentExpression = [];
+                    exprContentIndent = -1;
 
                     const name = this._extractName(trimmed, objectType);
 
@@ -235,6 +237,7 @@ class TMDLParser {
                         const afterEq = trimmed.substring(eqIndex + 1).trim();
                         if (afterEq) {
                             currentExpression.push(afterEq);
+                            exprContentIndent = indent; // inline expression; treat as same-level
                         }
                         state = 'EXPRESSION';
                         expressionIndent = indent + 1;
@@ -247,13 +250,28 @@ class TMDLParser {
 
             // Inside expression (multi-line DAX, M, etc.)
             if (state === 'EXPRESSION') {
-                // Expression continues while indent is deeper than object or we're collecting
                 if (indent > baseIndent || trimmed === '') {
-                    currentExpression.push(line);
-                    continue;
+                    if (trimmed !== '') {
+                        if (exprContentIndent === -1) {
+                            // First non-empty expression line — record its indent level
+                            exprContentIndent = indent;
+                        } else if (indent < exprContentIndent) {
+                            // Shallower than expression content → TMDL property line
+                            // (e.g. formatString/displayFolder at baseIndent+1 while
+                            //  expression content is at baseIndent+2)
+                            state = 'PROPERTIES';
+                            exprContentIndent = -1;
+                            // Fall through to property handling
+                        }
+                    }
+                    if (state === 'EXPRESSION') {
+                        currentExpression.push(line);
+                        continue;
+                    }
                 } else {
                     // Expression ended, process this line as a property or new object
                     state = 'PROPERTIES';
+                    exprContentIndent = -1;
                     // Fall through to property handling
                 }
             }

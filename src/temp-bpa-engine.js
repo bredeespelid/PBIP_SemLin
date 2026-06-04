@@ -18,11 +18,14 @@ const BPARules = [
 
       model.tables.forEach(t => {
         if (t._isAutoDate) return;
-        const objects = [...t.measures, ...t.columns.filter(c => c.expression)];
-        
+        const objects = [
+          ...t.measures.map(m => ({ ...m, _isMeasure: true })),
+          ...t.columns.filter(c => c.expression).map(c => ({ ...c, _isMeasure: false }))
+        ];
+
         objects.forEach(obj => {
           if (!obj.expression) return;
-          
+
           // Match all unqualified [Bracketed] names not preceded by quote or word char
           const matches = obj.expression.matchAll(/(?<!['"\w\d])\[([^\]]+)\]/g);
           for (const match of matches) {
@@ -32,7 +35,7 @@ const BPARules = [
               findings.push({
                 table: t.name,
                 object: obj.name,
-                type: obj.expression.includes('measure') ? 'Measure' : 'Calculated Column',
+                type: obj._isMeasure ? 'Measure' : 'Calculated Column',
                 message: `Object [${obj.name}] contains an unqualified column reference [${name}]. Use 'Table'[${name}] instead.`
               });
             }
