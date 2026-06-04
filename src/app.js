@@ -415,8 +415,11 @@ class App {
             // Find SemanticModel and Report folders
             const result = await this.findPBIPStructure();
 
-            if (result.needsDiscovery) {
-                // Multiple models/reports found — show discovery panel
+            if (result.workspaceCollection) {
+                // Folder contains multiple workspace sub-folders — load all at once
+                await this._loadWorkspaceCollection(result.workspaceCollection);
+            } else if (result.needsDiscovery) {
+                // Multiple models/reports found in same folder — show discovery panel
                 this.showDiscoveryPanel(result.models, result.reports);
             } else {
                 // Single model found — proceed directly
@@ -471,6 +474,24 @@ class App {
         }
 
         if (allModels.length === 0) {
+            // No direct .SemanticModel found — scan one level deeper for a
+            // "workspaces" folder that contains workspace sub-folders, each
+            // holding their own .SemanticModel (and optional .Report).
+            const collectionItems = [];
+            for await (const sub of this.folderHandle.values()) {
+                if (sub.kind !== 'directory') continue;
+                let subModel = null, subReport = null;
+                for await (const grand of sub.values()) {
+                    if (grand.kind !== 'directory') continue;
+                    if (grand.name.endsWith('.SemanticModel')) subModel = grand;
+                    else if (grand.name.endsWith('.Report')) subReport = grand;
+                }
+                if (subModel) collectionItems.push({ name: sub.name, modelHandle: subModel, reportHandle: subReport || null });
+            }
+            if (collectionItems.length > 0) {
+                return { needsDiscovery: false, workspaceCollection: collectionItems };
+            }
+
             throw new Error(
                 'No semantic model found.\n\n' +
                 'Please select a project folder containing a .SemanticModel subfolder,\n' +
@@ -611,6 +632,22 @@ class App {
         document.getElementById('folderInfo').classList.remove('hidden');
         document.getElementById('folderName').textContent = this.folderHandle.name;
         this.parseModel();
+    }
+
+    async _loadWorkspaceCollection(items) {
+        document.getElementById('landingSection').classList.add('hidden');
+        document.getElementById('folderInfo').classList.remove('hidden');
+        document.getElementById('folderName').textContent = this.folderHandle.name;
+
+        this.showLoading(true, `Loading ${items.length} workspaces…`);
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            this.semanticModelHandle = item.modelHandle;
+            this.reportHandle = item.reportHandle;
+            this.showLoading(true, `Loading workspace ${i + 1} / ${items.length}: ${item.name}`);
+            await this.parseModel();
+        }
+        this.showLoading(false);
     }
 
     // ──────────────────────────────────────────────
