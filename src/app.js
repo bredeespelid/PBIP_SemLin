@@ -8,6 +8,7 @@ class App {
         this.folderHandle = null;
         this.semanticModelHandle = null;
         this.reportHandle = null;
+        this.reportHandles = []; // all selected report folders (when model is shared)
 
         // ── Multi-workspace storage ──
         this._workspaces = [];   // [{ id, name, parsedModel, visualData, ... }]
@@ -561,14 +562,11 @@ class App {
             }
             this.semanticModelHandle = models[parseInt(selectedModelIdx)];
 
-            // Get selected report(s)
+            // Get selected report(s) — collect ALL checked, not just the first
             const reportList = document.getElementById('discoveryReportList');
             const checkedReports = reportList.querySelectorAll('input:checked');
-            if (checkedReports.length > 0) {
-                this.reportHandle = reports[parseInt(checkedReports[0].value)];
-            } else {
-                this.reportHandle = null;
-            }
+            this.reportHandles = Array.from(checkedReports).map(inp => reports[parseInt(inp.value)]);
+            this.reportHandle = this.reportHandles[0] || null; // backward compat
 
             document.getElementById('discoveryPanel').classList.add('hidden');
             this._proceedAfterSelection();
@@ -631,6 +629,8 @@ class App {
         document.getElementById('discoveryPanel').classList.add('hidden');
         document.getElementById('folderInfo').classList.remove('hidden');
         document.getElementById('folderName').textContent = this.folderHandle.name;
+        // Single-report path: ensure reportHandles reflects the one reportHandle
+        this.reportHandles = this.reportHandle ? [this.reportHandle] : [];
         this.parseModel();
     }
 
@@ -644,6 +644,7 @@ class App {
             const item = items[i];
             this.semanticModelHandle = item.modelHandle;
             this.reportHandle = item.reportHandle;
+            this.reportHandles = item.reportHandle ? [item.reportHandle] : [];
             this.showLoading(true, `Loading workspace ${i + 1} / ${items.length}: ${item.name}`);
             await this.parseModel();
         }
@@ -880,19 +881,39 @@ class App {
             // Extract DAX references
             this.measureRefs = parser.extractAllReferences();
 
-            // Parse visuals and theme if report folder exists
+            // Parse visuals and theme from all selected report handles (merged)
             this.visualData = null;
             this.themeData = null;
-            if (this.reportHandle) {
-                try {
-                    const reportPages = await this.readReportFiles();
-                    const visualParser = new VisualParser();
-                    this.visualData = visualParser.parseReport(reportPages);
-                } catch (err) {
-                    console.warn('Could not parse report visuals:', err);
+            const handles = this.reportHandles.length > 0
+                ? this.reportHandles
+                : (this.reportHandle ? [this.reportHandle] : []);
+            if (handles.length > 0) {
+                const visualParser = new VisualParser();
+                let mergedPages = [], mergedVisuals = [], mergedFieldMap = {};
+                for (const rHandle of handles) {
+                    try {
+                        const reportPages = await this.readReportFiles(rHandle);
+                        const parsed = visualParser.parseReport(reportPages);
+                        mergedPages.push(...parsed.pages);
+                        mergedVisuals.push(...parsed.visuals);
+                        for (const [key, usages] of Object.entries(parsed.fieldUsageMap)) {
+                            mergedFieldMap[key] = mergedFieldMap[key]
+                                ? [...mergedFieldMap[key], ...usages]
+                                : [...usages];
+                        }
+                    } catch (err) {
+                        console.warn('Could not parse report visuals:', rHandle.name, err);
+                    }
+                    if (!this.themeData) {
+                        // Use theme from first report that has one
+                        const origHandle = this.reportHandle;
+                        this.reportHandle = rHandle;
+                        const themes = await this.readThemeFiles();
+                        if (themes.length > 0) this.themeData = themes[0];
+                        this.reportHandle = origHandle;
+                    }
                 }
-                const themes = await this.readThemeFiles();
-                if (themes.length > 0) this.themeData = themes[0];
+                this.visualData = { pages: mergedPages, visuals: mergedVisuals, fieldUsageMap: mergedFieldMap };
             }
 
             // Build lineage engine
@@ -1132,12 +1153,13 @@ class App {
         return files;
     }
 
-    async readReportFiles() {
+    async readReportFiles(handle = null) {
+        const reportHandle = handle || this.reportHandle;
         const pages = [];
         let defHandle;
 
         try {
-            defHandle = await this.reportHandle.getDirectoryHandle('definition');
+            defHandle = await reportHandle.getDirectoryHandle('definition');
         } catch {
             return pages;
         }
