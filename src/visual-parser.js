@@ -42,6 +42,22 @@ class VisualParser {
                 this.visuals.push(parsed);
             }
 
+            // Page-level filters (stored in page.json filterConfig)
+            if (page.filterConfig) {
+                const pageFilterMap = new Map();
+                this._extractFromFilterConfig(page.filterConfig, pageFilterMap);
+                for (const [, field] of pageFilterMap) {
+                    const key = `${field.type}|${field.table || field.entity}|${field.name || field.column || field.hierarchy}`;
+                    if (!this.fieldUsageMap.has(key)) this.fieldUsageMap.set(key, []);
+                    this.fieldUsageMap.get(key).push({
+                        visualName: 'Page Filter',
+                        visualType: 'pageFilter',
+                        pageName: pageInfo.displayName,
+                        projectionName: 'filter'
+                    });
+                }
+            }
+
             this.pages.push(pageInfo);
         }
 

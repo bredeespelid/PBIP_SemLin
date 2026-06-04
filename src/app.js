@@ -1159,6 +1159,7 @@ class App {
             let pageWidth = null;
             let pageHeight = null;
             let pageBinding = null;
+            let pageFilterConfig = null;
             try {
                 const pageJsonHandle = await pageEntry.getFileHandle('page.json');
                 const pageContent = await this.readFile(pageJsonHandle);
@@ -1168,6 +1169,7 @@ class App {
                 pageWidth = pageData.width || null;
                 pageHeight = pageData.height || null;
                 pageBinding = pageData.pageBinding || null;
+                pageFilterConfig = pageData.filterConfig || null;
             } catch {
                 // OK, use folder name
             }
@@ -1203,6 +1205,7 @@ class App {
                 pageWidth,
                 pageHeight,
                 pageBinding,
+                filterConfig: pageFilterConfig,
                 visuals
             });
         }
