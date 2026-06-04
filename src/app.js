@@ -2367,6 +2367,37 @@ class App {
                 }
                 html += '</div></div>';
             }
+
+        } else if (type === 'page') {
+            const pageName = id.replace('page:', '');
+            badgeLabel = 'Report Page';
+            badgeClass = 'visual';
+            name = pageName;
+
+            // Visuals on this page
+            const pageVisuals = this.visualData?.visuals?.filter(v => v.pageName === pageName) || [];
+            if (pageVisuals.length > 0) {
+                html += `<div class="lineage-detail-section"><h4>Visuals on this page (${pageVisuals.length})</h4><div class="lineage-detail-chips">`;
+                for (const v of pageVisuals) {
+                    html += `<span class="lineage-detail-chip visual">${esc(v.visualName || v.visualType || 'Visual')}</span>`;
+                }
+                html += '</div></div>';
+            }
+
+            // Measures used across all visuals on this page
+            const pageMeasures = new Set();
+            for (const v of pageVisuals) {
+                for (const f of (v.fields || [])) {
+                    if (f.type === 'measure') pageMeasures.add(`[${f.name}]`);
+                }
+            }
+            if (pageMeasures.size > 0) {
+                html += '<div class="lineage-detail-section"><h4>Measures used</h4><div class="lineage-detail-chips">';
+                for (const m of pageMeasures) {
+                    html += `<span class="lineage-detail-chip measure">${esc(m)}</span>`;
+                }
+                html += '</div></div>';
+            }
         }
 
         // Remove old type classes

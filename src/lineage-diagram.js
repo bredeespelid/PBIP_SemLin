@@ -22,6 +22,8 @@ class LineageDiagramRenderer {
             columnBg: '#e3f2fd',
             visual: '#9c27b0',
             visualBg: '#f3e5f5',
+            page: '#00695c',
+            pageBg: '#e0f2f1',
             expression: '#78909c',
             expressionBg: '#eceff1',
             calcGroup: '#2e7d32',
@@ -159,6 +161,17 @@ class LineageDiagramRenderer {
                     type: 'visual',
                     detail: pageName
                 }]
+            },
+            {
+                label: 'Page',
+                color: this.colors.page,
+                colorBg: this.colors.pageBg,
+                items: [{
+                    id: `page:${pageName}`,
+                    name: pageName,
+                    type: 'page',
+                    detail: 'Report page'
+                }]
             }
         ];
 
@@ -166,7 +179,7 @@ class LineageDiagramRenderer {
         const svg = this._renderLayout(layout, columns, `Lineage: ${visualName}`);
 
         // Draw edges for this trace
-        this._drawTraceEdges(svg, layout, lineage, columns);
+        this._drawTraceEdges(svg, layout, lineage, columns, pageName, visualName);
 
         target.appendChild(svg);
         this._initInteractivity(svg, layout.width, layout.height, target);
@@ -218,7 +231,19 @@ class LineageDiagramRenderer {
                     id: `visual:${v.page}|${v.name}`,
                     name: v.name,
                     type: 'visual',
-                    detail: v.page + (v.indirect ? ` (via ${v.via})` : '')
+                    detail: v.page + (v.indirect ? ` (via ${v.via})` : ''),
+                    pageName: v.page
+                }))
+            },
+            {
+                label: 'Pages',
+                color: this.colors.page,
+                colorBg: this.colors.pageBg,
+                items: [...new Map(impact.visuals.map(v => [v.page, v])).entries()].map(([page, v]) => ({
+                    id: `page:${page}`,
+                    name: page,
+                    type: 'page',
+                    detail: `${impact.visuals.filter(x => x.page === page).length} visual(s)`
                 }))
             }
         ];
@@ -406,7 +431,19 @@ class LineageDiagramRenderer {
                     id: `visual:${v.page}|${v.name}`,
                     name: v.name,
                     type: 'visual',
-                    detail: v.page
+                    detail: v.page,
+                    pageName: v.page
+                }))
+            },
+            {
+                label: 'Pages',
+                color: this.colors.page,
+                colorBg: this.colors.pageBg,
+                items: [...new Map(consumers.visuals.map(v => [v.page, v])).entries()].map(([page]) => ({
+                    id: `page:${page}`,
+                    name: page,
+                    type: 'page',
+                    detail: `${consumers.visuals.filter(v => v.page === page).length} visual(s)`
                 }))
             }
         ];
@@ -436,7 +473,7 @@ class LineageDiagramRenderer {
             const tItem = posMap.get(`table:${m.table}`);
             if (tItem) this._drawEdge(svg, tItem, mItem, 'defined_in_table');
         }
-        // Measures → Visuals
+        // Measures → Visuals → Pages
         for (const v of consumers.visuals) {
             const vItem = posMap.get(`visual:${v.page}|${v.name}`);
             if (!vItem) continue;
@@ -454,6 +491,9 @@ class LineageDiagramRenderer {
                 const tItem = posMap.get(`table:${consumers.tables[0].name}`);
                 if (tItem) this._drawEdge(svg, tItem, vItem, 'uses_field');
             }
+            // Visual → Page
+            const pageItem = posMap.get(`page:${v.page}`);
+            if (pageItem) this._drawEdge(svg, vItem, pageItem, 'belongs_to_page');
         }
 
         target.appendChild(svg);
@@ -588,37 +628,33 @@ class LineageDiagramRenderer {
             });
         }
 
-        // Issue 15: Group visuals by page with expandable hierarchy
+        // Show visuals flat (pageName as detail); collect unique pages separately
         const visualItems = [];
+        const pageItems = [];
         if (rawVisualItems.length > 0) {
-            const pageMap = new Map();
+            const pagesSeen = new Map(); // pageName → count
             for (const v of rawVisualItems) {
                 const page = v.pageName || 'Unknown Page';
-                if (!pageMap.has(page)) pageMap.set(page, []);
-                pageMap.get(page).push(v);
+                visualItems.push({ ...v, detail: page });
+                pagesSeen.set(page, (pagesSeen.get(page) || 0) + 1);
             }
-            for (const [pageName, pageVisuals] of pageMap) {
-                const isExpanded = this._expandedPages.has(pageName);
-                visualItems.push({
-                    id: `page:${pageName}`, name: pageName, type: 'pageHeader',
-                    detail: `${pageVisuals.length} visual${pageVisuals.length !== 1 ? 's' : ''}`,
-                    isPageHeader: true, expandable: true, expanded: isExpanded,
-                    pageName, visualCount: pageVisuals.length
+            for (const [page, count] of pagesSeen) {
+                pageItems.push({
+                    id: `page:${page}`, name: page, type: 'page',
+                    detail: `${count} visual${count !== 1 ? 's' : ''}`
                 });
-                if (isExpanded) {
-                    for (const v of pageVisuals) {
-                        visualItems.push({
-                            ...v, isSubItem: true, parentPage: pageName
-                        });
-                    }
-                }
             }
         } else {
-            // Issue 14: Placeholder for empty visuals
+            // Placeholder for empty visuals
             const reason = engine.visualData ? 'No visuals in report' : 'No report folder loaded';
             visualItems.push({
                 id: 'placeholder:noVisuals', name: reason,
                 type: 'placeholder', detail: 'Select project root folder',
+                _isPlaceholder: true
+            });
+            pageItems.push({
+                id: 'placeholder:noPages', name: reason,
+                type: 'placeholder', detail: '',
                 _isPlaceholder: true
             });
         }
@@ -627,7 +663,8 @@ class LineageDiagramRenderer {
             { label: 'Data Sources', color: this.colors.source, colorBg: this.colors.sourceBg, items: sourceItems },
             { label: 'Tables', color: this.colors.table, colorBg: this.colors.tableBg, items: tableItems },
             { label: 'Measures', color: this.colors.measure, colorBg: this.colors.measureBg, items: measureColumnItems },
-            { label: 'Visuals', color: this.colors.visual, colorBg: this.colors.visualBg, items: visualItems }
+            { label: 'Visuals', color: this.colors.visual, colorBg: this.colors.visualBg, items: visualItems },
+            { label: 'Pages', color: this.colors.page, colorBg: this.colors.pageBg, items: pageItems }
         ];
     }
 
@@ -1038,9 +1075,16 @@ class LineageDiagramRenderer {
 
         // Draw relationship edges within the Tables column (Phase 5)
         this._drawRelationshipEdges(svg, posMap, engine);
+
+        // Visual → Page edges
+        for (const [id, item] of posMap) {
+            if (item.type !== 'visual' || !item.pageName) continue;
+            const pageItem = posMap.get(`page:${item.pageName}`);
+            if (pageItem) this._drawEdge(svg, item, pageItem, 'belongs_to_page');
+        }
     }
 
-    _drawTraceEdges(svg, layout, lineage, columns) {
+    _drawTraceEdges(svg, layout, lineage, columns, pageName, visualName) {
         const posMap = new Map();
         for (const col of columns) {
             for (let i = 0; i < (col._visibleCount || col.items.length); i++) {
@@ -1048,9 +1092,16 @@ class LineageDiagramRenderer {
             }
         }
 
-        // Visual → measures/columns
-        const visualItem = columns[3].items[0];
+        // Find visual item by ID (avoids fragile column-index assumptions)
+        const visualItem = posMap.get(`visual:${pageName}|${visualName}`)
+            || [...posMap.values()].find(item => item.type === 'visual');
         if (!visualItem) return;
+
+        // Visual → Page
+        if (pageName) {
+            const pageItem = posMap.get(`page:${pageName}`);
+            if (pageItem) this._drawEdge(svg, visualItem, pageItem, 'belongs_to_page');
+        }
 
         for (const m of lineage.measures) {
             const mid = `measure:${m.table}.${m.name}`;
@@ -1171,6 +1222,9 @@ class LineageDiagramRenderer {
             } else {
                 this._drawEdge(svg, sourceItem, vItem, 'uses_field');
             }
+            // Visual → Page
+            const pageItem = posMap.get(`page:${v.page}`);
+            if (pageItem) this._drawEdge(svg, vItem, pageItem, 'belongs_to_page');
         }
     }
 
