@@ -4328,14 +4328,12 @@ svg{max-width:100%;height:auto}
         }
 
         // ── Measure summary stats ──
-        let mTotal = 0, mUnused = 0, mIndirect = 0;
+        let mTotal = 0, mUnused = 0;
         for (const t of this.parsedModel.tables) {
             if (t._isAutoDate) continue;
             for (const m of t.measures) {
                 mTotal++;
-                const mu = msrUsage.get(`${t.name}|${m.name}`);
-                if (!mu) mUnused++;
-                else if (mu.usedByMeasure && !mu.visual) mIndirect++;
+                if (!msrUsage.has(`${t.name}|${m.name}`)) mUnused++;
             }
         }
 
@@ -4349,7 +4347,6 @@ svg{max-width:100%;height:auto}
             <div class="fu-summary-stat" style="color:var(--text-secondary)">${total} cols total</div>
             <div style="width:1px;background:var(--border);margin:0 4px"></div>
             <div class="fu-summary-stat"><span class="fu-dot fu-dot-unused"></span><strong>${mUnused}</strong>&nbsp;unused measures</div>
-            <div class="fu-summary-stat"><span class="fu-dot fu-dot-dax"></span><strong>${mIndirect}</strong>&nbsp;called by measure</div>
             <div class="fu-summary-stat" style="color:var(--text-secondary)">${mTotal} measures total</div>
         </div>`;
 
@@ -4369,14 +4366,12 @@ svg{max-width:100%;height:auto}
 
                         let tags = '';
                         if (mUnusedFlag) {
-                            tags = `<span class="fu-tag fu-tag-unused">⚠ not used anywhere</span>`;
-                        } else if (mu.usedByMeasure && !mu.visual) {
-                            tags = `<span class="fu-tag fu-tag-dax">🧮 called by measure</span>`;
-                        } else {
+                            tags = `<span class="fu-tag fu-tag-unused">⚠ unused</span>`;
+                        } else if (mu.visual) {
                             tags = `<span class="fu-tag fu-tag-visual">📊 ${mu.visualCount} visual(s)</span>`;
                             if (mu.pages?.length) tags += `<span class="fu-tag fu-tag-sort" style="background:#e8eaf6;color:#283593">${mu.pages.join(', ')}</span>`;
-                            if (mu.usedByMeasure) tags += `<span class="fu-tag fu-tag-dax">+ called by measure</span>`;
                         }
+                        // usedByMeasure-only: no tag — it's used, just not directly in a visual
                         if (m.isHidden) tags += `<span class="fu-tag fu-tag-hidden">hidden</span>`;
                         mRows += `<div class="fu-col-row${mUnusedFlag ? ' unused' : ''}">
                             <span class="fu-col-name" title="${esc(m.name)}">[${esc(m.name)}]</span>
