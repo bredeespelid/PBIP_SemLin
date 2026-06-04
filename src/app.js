@@ -3952,7 +3952,7 @@ svg{max-width:100%;height:auto}
 
         // 1. Visuals
         if (this.visualData?.fieldUsageMap) {
-            for (const [key, usages] of this.visualData.fieldUsageMap) {
+            for (const [key, usages] of Object.entries(this.visualData.fieldUsageMap)) {
                 const parts = key.split('|');
                 if (parts[0] !== 'column') continue;
                 const [, table, col] = parts;
