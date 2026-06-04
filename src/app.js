@@ -3935,22 +3935,27 @@ svg{max-width:100%;height:auto}
                 if (c.isHidden) continue;
                 const key = `${m.name}|${c.name}`;
                 const u = usage.get(key);
-                if (!u || (!u.visual && !u.dax && !u.rel && !u.sort)) count++;
+                if (!u || (!u.visual && !u.dax && !u.rel && !u.sort && !u.key && !u.hierarchy && !u.rls)) count++;
             }
         }
         return count;
     }
 
     _buildColumnUsageMap() {
-        const usage = new Map(); // "TableName|ColumnName" → { visual, dax, rel, sort, visualCount, daxMeasures[] }
+        const usage = new Map();
+        // "TableName|ColumnName" → { visual, dax, rel, sort, key, hierarchy, rls, visualCount, daxMeasures[] }
 
         const ensure = (table, col) => {
             const k = `${table}|${col}`;
-            if (!usage.has(k)) usage.set(k, { visual: false, dax: false, rel: false, sort: false, visualCount: 0, daxMeasures: [] });
+            if (!usage.has(k)) usage.set(k, {
+                visual: false, dax: false, rel: false, sort: false,
+                key: false, hierarchy: false, rls: false,
+                visualCount: 0, daxMeasures: []
+            });
             return usage.get(k);
         };
 
-        // 1. Visuals
+        // 1. Visuals (projection fields)
         if (this.visualData?.fieldUsageMap) {
             for (const [key, usages] of Object.entries(this.visualData.fieldUsageMap)) {
                 const parts = key.split('|');
@@ -3974,7 +3979,7 @@ svg{max-width:100%;height:auto}
             }
         }
 
-        // 3. Relationships
+        // 3. Relationships (FK + PK)
         for (const rel of (this.parsedModel?.relationships || [])) {
             ensure(rel.fromTable, rel.fromColumn).rel = true;
             ensure(rel.toTable, rel.toColumn).rel = true;
@@ -3983,13 +3988,56 @@ svg{max-width:100%;height:auto}
         // 4. Sort-by-column
         for (const t of (this.parsedModel?.tables || [])) {
             for (const c of t.columns) {
-                if (c.sortByColumn) {
-                    const u = ensure(t.name, c.sortByColumn);
-                    u.sort = true;
+                if (c.sortByColumn) ensure(t.name, c.sortByColumn).sort = true;
+            }
+        }
+
+        // 5. Key columns (isKey flag)
+        for (const t of (this.parsedModel?.tables || [])) {
+            for (const c of t.columns) {
+                if (c.isKey) ensure(t.name, c.name).key = true;
+            }
+        }
+
+        // 6. Hierarchy levels
+        for (const t of (this.parsedModel?.tables || [])) {
+            for (const h of (t.hierarchies || [])) {
+                for (const level of (h.levels || [])) {
+                    if (level.column) ensure(t.name, level.column).hierarchy = true;
                 }
             }
         }
 
+        // 7. RLS role filter expressions
+        for (const role of (this.parsedModel?.roles || [])) {
+            for (const perm of (role.tablePermissions || [])) {
+                if (!perm.filterExpression) continue;
+                const refs = DAXReferenceExtractor.extract(perm.filterExpression);
+                for (const cr of (refs.columnRefs || [])) {
+                    ensure(cr.table, cr.column).rls = true;
+                }
+            }
+        }
+
+        return usage;
+    }
+
+    _buildMeasureUsageMap() {
+        // "TableName|MeasureName" → { visual, visualCount, pages[] }
+        const usage = new Map();
+        if (this.visualData?.fieldUsageMap) {
+            for (const [key, usages] of Object.entries(this.visualData.fieldUsageMap)) {
+                const parts = key.split('|');
+                if (parts[0] !== 'measure') continue;
+                const [, table, name] = parts;
+                if (!table || !name) continue;
+                usage.set(`${table}|${name}`, {
+                    visual: true,
+                    visualCount: usages.length,
+                    pages: [...new Set(usages.map(u => u.pageName))]
+                });
+            }
+        }
         return usage;
     }
 
@@ -3999,99 +4047,152 @@ svg{max-width:100%;height:auto}
         if (!content || !this.parsedModel) return;
 
         const esc = s => this._esc(String(s ?? ''));
-        const usage = this._buildColumnUsageMap();
+        const colUsage = this._buildColumnUsageMap();
+        const msrUsage = this._buildMeasureUsageMap();
 
-        // Compute summary stats
+        const isColUnused = u => !u.visual && !u.dax && !u.rel && !u.sort && !u.key && !u.hierarchy && !u.rls;
+
+        // ── Column summary stats ──
         let total = 0, unused = 0, visualOnly = 0, daxOnly = 0, relOnly = 0, multi = 0;
         for (const t of this.parsedModel.tables) {
             if (t._isAutoDate) continue;
             for (const c of t.columns) {
                 total++;
-                const k = `${t.name}|${c.name}`;
-                const u = usage.get(k) || {};
-                const usageCount = [u.visual, u.dax, u.rel, u.sort].filter(Boolean).length;
-                if (usageCount === 0) unused++;
-                else if (usageCount > 1) multi++;
+                const u = colUsage.get(`${t.name}|${c.name}`) || {};
+                if (isColUnused(u)) { unused++; continue; }
+                const usedIn = [u.visual, u.dax, u.rel, u.sort, u.key, u.hierarchy, u.rls].filter(Boolean).length;
+                if (usedIn > 1) multi++;
                 else if (u.visual) visualOnly++;
                 else if (u.dax) daxOnly++;
-                else if (u.rel) relOnly++;
+                else relOnly++;
+            }
+        }
+
+        // ── Measure summary stats ──
+        let mTotal = 0, mUnused = 0;
+        for (const t of this.parsedModel.tables) {
+            if (t._isAutoDate) continue;
+            for (const m of t.measures) {
+                mTotal++;
+                if (!msrUsage.has(`${t.name}|${m.name}`)) mUnused++;
             }
         }
 
         summary.innerHTML = `
         <div class="fu-summary-bar">
-            <div class="fu-summary-stat"><span class="fu-dot fu-dot-unused"></span><strong>${unused}</strong>&nbsp;unused</div>
+            <div class="fu-summary-stat"><span class="fu-dot fu-dot-unused"></span><strong>${unused}</strong>&nbsp;unused cols</div>
             <div class="fu-summary-stat"><span class="fu-dot fu-dot-visual"></span><strong>${visualOnly}</strong>&nbsp;visuals only</div>
             <div class="fu-summary-stat"><span class="fu-dot fu-dot-dax"></span><strong>${daxOnly}</strong>&nbsp;DAX only</div>
-            <div class="fu-summary-stat"><span class="fu-dot fu-dot-rel"></span><strong>${relOnly}</strong>&nbsp;relationship only</div>
+            <div class="fu-summary-stat"><span class="fu-dot fu-dot-rel"></span><strong>${relOnly}</strong>&nbsp;rel/key/RLS</div>
             <div class="fu-summary-stat"><span class="fu-dot fu-dot-used"></span><strong>${multi}</strong>&nbsp;multi-use</div>
-            <div class="fu-summary-stat" style="margin-left:auto;color:var(--text-secondary)">${total} total columns</div>
+            <div class="fu-summary-stat" style="color:var(--text-secondary)">${total} cols total</div>
+            <div style="width:1px;background:var(--border);margin:0 4px"></div>
+            <div class="fu-summary-stat"><span class="fu-dot fu-dot-unused"></span><strong>${mUnused}</strong>&nbsp;unused measures</div>
+            <div class="fu-summary-stat" style="color:var(--text-secondary)">${mTotal} measures total</div>
         </div>`;
-
-        // Active filter
-        let activeFilter = document.querySelector('.fu-filter-btn.active')?.dataset.filter || 'all';
 
         const render = (filter) => {
             let html = '';
-            for (const t of this.parsedModel.tables) {
-                if (t._isAutoDate) continue;
 
-                const rows = t.columns.map(c => {
-                    const k = `${t.name}|${c.name}`;
-                    const u = usage.get(k) || {};
-                    const isUnused = !u.visual && !u.dax && !u.rel && !u.sort;
+            // ── Measures section ──
+            if (filter === 'all' || filter === 'unused' || filter === 'measures') {
+                let mRows = '';
+                for (const t of this.parsedModel.tables) {
+                    if (t._isAutoDate || t.measures.length === 0) continue;
+                    for (const m of t.measures) {
+                        const mu = msrUsage.get(`${t.name}|${m.name}`);
+                        const mUnusedFlag = !mu;
+                        if (filter === 'unused' && !mUnusedFlag) continue;
+                        if (filter === 'measures') { /* show all */ }
 
-                    if (filter === 'unused'  && !isUnused) return null;
-                    if (filter === 'visuals' && !u.visual) return null;
-                    if (filter === 'dax'     && (!u.dax || u.visual)) return null;
-
-                    let tags = '';
-                    if (isUnused) {
-                        tags += `<span class="fu-tag fu-tag-unused">⚠ unused</span>`;
-                    } else {
-                        if (u.visual)  tags += `<span class="fu-tag fu-tag-visual">📊 visuals (${u.visualCount})</span>`;
-                        if (u.dax)     tags += `<span class="fu-tag fu-tag-dax" title="${esc(u.daxMeasures.join(', '))}">🧮 DAX (${u.daxMeasures.length})</span>`;
-                        if (u.rel)     tags += `<span class="fu-tag fu-tag-rel">🔗 relationship</span>`;
-                        if (u.sort)    tags += `<span class="fu-tag fu-tag-sort">⇅ sort key</span>`;
+                        let tags = '';
+                        if (mUnusedFlag) {
+                            tags = `<span class="fu-tag fu-tag-unused">⚠ not in any visual</span>`;
+                        } else {
+                            tags = `<span class="fu-tag fu-tag-visual">📊 ${mu.visualCount} visual(s)</span>`;
+                            if (mu.pages?.length) tags += `<span class="fu-tag fu-tag-sort" style="background:#e8eaf6;color:#283593">${mu.pages.join(', ')}</span>`;
+                        }
+                        if (m.isHidden) tags += `<span class="fu-tag fu-tag-hidden">hidden</span>`;
+                        mRows += `<div class="fu-col-row${mUnusedFlag ? ' unused' : ''}">
+                            <span class="fu-col-name" title="${esc(m.name)}">[${esc(m.name)}]</span>
+                            <span class="fu-col-type" style="color:#f9a825">${esc(t.name)}</span>
+                            <span class="fu-col-tags">${tags}</span>
+                        </div>`;
                     }
-                    if (c.isHidden)    tags += `<span class="fu-tag fu-tag-hidden">hidden</span>`;
-
-                    return `<div class="fu-col-row${isUnused ? ' unused' : ''}">
-                        <span class="fu-col-name" title="${esc(c.name)}">${esc(c.name)}</span>
-                        <span class="fu-col-type">${esc(c.dataType || '—')}</span>
-                        <span class="fu-col-tags">${tags}</span>
+                }
+                if (mRows) {
+                    html += `<div class="fu-table-block">
+                        <div class="fu-table-header" data-fu-table="__measures__">
+                            <span class="material-symbols-outlined" style="font-size:16px;color:#f9a825">calculate</span>
+                            <span>Measures</span>
+                            ${mUnused > 0 ? `<span style="margin-left:8px;background:#ffebee;color:#c62828;padding:1px 7px;border-radius:10px;font-size:11px">${mUnused} not in visuals</span>` : ''}
+                            <span style="color:var(--text-secondary);font-size:11px;font-weight:400">${mTotal} total</span>
+                            <span class="fu-table-toggle">▶</span>
+                        </div>
+                        <div class="fu-table-body" id="fu-table-__measures__">${mRows}</div>
                     </div>`;
-                }).filter(Boolean);
-
-                if (rows.length === 0) continue;
-
-                const unusedInTable = t.columns.filter(c => {
-                    const u = usage.get(`${t.name}|${c.name}`) || {};
-                    return !u.visual && !u.dax && !u.rel && !u.sort;
-                }).length;
-                const badge = unusedInTable > 0
-                    ? `<span style="margin-left:8px;background:#ffebee;color:#c62828;padding:1px 7px;border-radius:10px;font-size:11px">${unusedInTable} unused</span>`
-                    : '';
-
-                const blockId = `fu-table-${t.name.replace(/\W/g, '_')}`;
-                html += `<div class="fu-table-block">
-                    <div class="fu-table-header" data-fu-table="${esc(t.name)}">
-                        <span class="material-symbols-outlined" style="font-size:16px;color:var(--primary)">table_chart</span>
-                        <span>${esc(t.name)}</span>${badge}
-                        <span style="color:var(--text-secondary);font-size:11px;font-weight:400">${t.columns.length} columns</span>
-                        <span class="fu-table-toggle">▶</span>
-                    </div>
-                    <div class="fu-table-body" id="${blockId}">
-                        ${rows.join('')}
-                    </div>
-                </div>`;
+                }
             }
-            content.innerHTML = html || '<p class="placeholder">No columns match this filter.</p>';
 
-            // Bind toggle
+            // ── Columns section (skip for measures-only filter) ──
+            if (filter !== 'measures') {
+                for (const t of this.parsedModel.tables) {
+                    if (t._isAutoDate) continue;
+
+                    const rows = t.columns.map(c => {
+                        const u = colUsage.get(`${t.name}|${c.name}`) || {};
+                        const unused = isColUnused(u);
+
+                        if (filter === 'unused'  && !unused) return null;
+                        if (filter === 'visuals' && !u.visual) return null;
+                        if (filter === 'dax'     && (!u.dax || u.visual)) return null;
+
+                        let tags = '';
+                        if (unused) {
+                            tags = `<span class="fu-tag fu-tag-unused">⚠ unused</span>`;
+                        } else {
+                            if (u.visual)    tags += `<span class="fu-tag fu-tag-visual">📊 visuals (${u.visualCount})</span>`;
+                            if (u.dax)       tags += `<span class="fu-tag fu-tag-dax" title="${esc(u.daxMeasures.join(', '))}">🧮 DAX (${u.daxMeasures.length})</span>`;
+                            if (u.rel)       tags += `<span class="fu-tag fu-tag-rel">🔗 relationship</span>`;
+                            if (u.sort)      tags += `<span class="fu-tag fu-tag-sort">⇅ sort key</span>`;
+                            if (u.key)       tags += `<span class="fu-tag fu-tag-rel" style="background:#e8f5e9;color:#2e7d32">🔑 key</span>`;
+                            if (u.hierarchy) tags += `<span class="fu-tag fu-tag-sort" style="background:#e8eaf6;color:#283593">📂 hierarchy</span>`;
+                            if (u.rls)       tags += `<span class="fu-tag fu-tag-rel" style="background:#fce4ec;color:#880e4f">🛡 RLS</span>`;
+                        }
+                        if (c.isHidden) tags += `<span class="fu-tag fu-tag-hidden">hidden</span>`;
+
+                        return `<div class="fu-col-row${unused ? ' unused' : ''}">
+                            <span class="fu-col-name" title="${esc(c.name)}">${esc(c.name)}</span>
+                            <span class="fu-col-type">${esc(c.dataType || '—')}</span>
+                            <span class="fu-col-tags">${tags}</span>
+                        </div>`;
+                    }).filter(Boolean);
+
+                    if (rows.length === 0) continue;
+
+                    const unusedInTable = t.columns.filter(c => isColUnused(colUsage.get(`${t.name}|${c.name}`) || {})).length;
+                    const badge = unusedInTable > 0
+                        ? `<span style="margin-left:8px;background:#ffebee;color:#c62828;padding:1px 7px;border-radius:10px;font-size:11px">${unusedInTable} unused</span>`
+                        : '';
+                    const blockId = `fu-table-${t.name.replace(/\W/g, '_')}`;
+                    html += `<div class="fu-table-block">
+                        <div class="fu-table-header" data-fu-table="${esc(t.name)}">
+                            <span class="material-symbols-outlined" style="font-size:16px;color:var(--primary)">table_chart</span>
+                            <span>${esc(t.name)}</span>${badge}
+                            <span style="color:var(--text-secondary);font-size:11px;font-weight:400">${t.columns.length} columns</span>
+                            <span class="fu-table-toggle">▶</span>
+                        </div>
+                        <div class="fu-table-body" id="${blockId}">${rows.join('')}</div>
+                    </div>`;
+                }
+            }
+
+            content.innerHTML = html || '<p class="placeholder">No fields match this filter.</p>';
+
             content.querySelectorAll('.fu-table-header').forEach(hdr => {
                 hdr.addEventListener('click', () => {
-                    const body = document.getElementById(`fu-table-${hdr.dataset.fuTable.replace(/\W/g, '_')}`);
+                    const blockId = `fu-table-${hdr.dataset.fuTable.replace(/\W/g, '_')}`;
+                    const body = document.getElementById(blockId);
                     const toggle = hdr.querySelector('.fu-table-toggle');
                     if (!body) return;
                     const open = body.classList.toggle('open');
@@ -4100,9 +4201,8 @@ svg{max-width:100%;height:auto}
             });
         };
 
-        render(activeFilter);
+        render(document.querySelector('.fu-filter-btn.active')?.dataset.filter || 'all');
 
-        // Bind filter buttons (only once)
         if (!this._fuFilterBound) {
             this._fuFilterBound = true;
             document.getElementById('fieldUsageToolbar').addEventListener('click', e => {
