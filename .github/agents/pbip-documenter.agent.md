@@ -7,7 +7,10 @@ description: >
   build a Fabric Data App (dashboard.html + model-ctx.md + Rayfin scaffold);
   or explore tables, measures, lineage, BPA findings, and relationships.
 target: vscode
-tools: [read, write, findFiles, execute, browser]
+tools: [read, write, findFiles, browser]
+agents: []
+model: claude-sonnet-4-5
+argument-hint: "Load the PBIP Documenter app first, then describe what you want to do"
 ---
 
 ## Startup
