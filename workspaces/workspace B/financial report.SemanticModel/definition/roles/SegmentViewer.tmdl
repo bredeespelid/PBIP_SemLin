@@ -1,7 +1,0 @@
-role SegmentViewer
-	modelPermission: read
-
-	tablePermission financials = financials[Segment] = "Government" || financials[Segment] = "Midmarket"
-
-	annotation PBI_Id = ed33d079520344e8b5d46e5956f45ab3
-

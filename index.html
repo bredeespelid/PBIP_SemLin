@@ -221,6 +221,12 @@
             </button>
             <!-- Sidebar Navigation -->
             <aside class="sidebar" id="sidebar" aria-label="Model navigation">
+                <!-- Workspace list -->
+                <div id="sidebarWorkspaceSection" class="hidden">
+                    <div class="sidebar-ws-label">Workspaces</div>
+                    <div id="sidebarWorkspaceList"></div>
+                </div>
+
                 <div class="sidebar-search" id="sidebarSearch">
                     <div class="sidebar-search-input-wrap">
                         <span class="material-symbols-outlined sidebar-search-icon">search</span>
@@ -333,6 +339,18 @@
                         Ontology
                     </div>
                 </div>
+                <div class="sidebar-section" id="sidebarExecutiveSection">
+                    <div class="sidebar-header" data-section="executive" tabindex="0" role="button" style="border-left:3px solid #9b59b6">
+                        <span class="material-symbols-outlined" style="color:#9b59b6">leaderboard</span>
+                        Lederoversikt
+                    </div>
+                </div>
+                <div class="sidebar-section" id="sidebarAIContextSection">
+                    <div class="sidebar-header" data-section="ai-context" tabindex="0" role="button" style="border-left:3px solid #e67e22">
+                        <span class="material-symbols-outlined" style="color:#e67e22">smart_toy</span>
+                        AI Context
+                    </div>
+                </div>
             </aside>
 
             <!-- Main Content Area -->
@@ -345,66 +363,79 @@
 
                 <!-- Best Practice Analyzer (BPA) Section -->
                 <div id="view-bpa" class="section-view content-panel">
-                    <div class="bpa-header-wrap" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 24px;">
+                    <div class="bpa-page-header">
                         <h2>Best Practice Analyzer (BPA)</h2>
-                        <span class="governance-title-badge" style="background:var(--accent); color:#111111; padding:4px 10px; border-radius:4px; font-size:12px; font-weight:700">GOVERNANCE AUDIT</span>
-                    </div>
-                    
-                    <div id="bpaDashboard" class="bpa-dashboard-grid">
-                        <div class="bpa-score-card">
-                            <div class="score-ring-wrap">
-                                <svg class="score-ring" viewBox="0 0 120 120">
-                                    <circle class="score-ring-bg" cx="60" cy="60" r="54"></circle>
-                                    <circle id="bpaScoreRing" class="score-ring-progress" cx="60" cy="60" r="54" style="stroke-dashoffset: 339.292; stroke-dasharray: 339.292;"></circle>
-                                </svg>
-                                <div class="score-number-container">
-                                    <span id="bpaScoreNumber">100</span>
-                                    <span class="score-percent">%</span>
-                                </div>
-                            </div>
-                            <div class="bpa-score-text">Compliance Score</div>
-                        </div>
-                        
-                        <div class="bpa-summary-card">
-                            <div class="bpa-stat-item critical">
-                                <span class="material-symbols-outlined stat-icon">gpp_maybe</span>
-                                <div class="stat-info">
-                                    <span id="bpaCountCritical" class="stat-count">0</span>
-                                    <span class="stat-label">Critical Issues</span>
-                                </div>
-                            </div>
-                            <div class="bpa-stat-item warning">
-                                <span class="material-symbols-outlined stat-icon">warning</span>
-                                <div class="stat-info">
-                                    <span id="bpaCountWarning" class="stat-count">0</span>
-                                    <span class="stat-label">Warnings</span>
-                                </div>
-                            </div>
-                            <div class="bpa-stat-item info">
-                                <span class="material-symbols-outlined stat-icon">info</span>
-                                <div class="stat-info">
-                                    <span id="bpaCountInfo" class="stat-count">0</span>
-                                    <span class="stat-label">Informational</span>
-                                </div>
-                            </div>
-                        </div>
+                        <span class="governance-title-badge" style="background:var(--accent);color:#111111;padding:4px 10px;border-radius:4px;font-size:12px;font-weight:700">GOVERNANCE AUDIT</span>
                     </div>
 
-                    <div class="bpa-filter-bar" style="margin-top: 24px; padding: 12px; background: var(--surface); border-radius: 4px; display: flex; gap: 12px; align-items: center; border: 1px solid var(--border-light)">
-                        <span style="font-size:13px; font-weight:600; color:var(--text)">Filter by severity:</span>
-                        <button type="button" class="btn-filter-bpa active" data-severity="all" style="background:var(--primary); color:#fff; border:none; padding:6px 12px; border-radius:4px; font-size:12px; cursor:pointer;">All (0)</button>
-                        <button type="button" class="btn-filter-bpa" data-severity="critical" style="background:#da291c; color:#fff; border:none; padding:6px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Critical</button>
-                        <button type="button" class="btn-filter-bpa" data-severity="warning" style="background:#ffb81c; color:#111; border:none; padding:6px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Warning</button>
-                        <button type="button" class="btn-filter-bpa" data-severity="info" style="background:#00a3e0; color:#fff; border:none; padding:6px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Info</button>
-                        
-                        <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
-                            <span class="material-symbols-outlined" style="font-size:18px; color:var(--text-light)">help_outline</span>
-                            <span style="font-size: 11px; color:var(--text-secondary)">Click on a violation to learn more about best practices.</span>
+                    <div class="bpa-panels-row">
+                        <!-- Semantic Model Panel -->
+                        <div class="bpa-panel bpa-panel-semantic">
+                            <div class="bpa-panel-header">
+                                <div class="bpa-panel-header-left">
+                                    <div class="bpa-panel-ring-wrap">
+                                        <svg class="bpa-panel-ring-svg" viewBox="0 0 80 80">
+                                            <circle class="score-ring-bg" cx="40" cy="40" r="34" style="stroke-width:6"></circle>
+                                            <circle id="bpaScoreRing" class="score-ring-progress" cx="40" cy="40" r="34"
+                                                style="stroke-dashoffset:213.628;stroke-dasharray:213.628;stroke-width:6;"></circle>
+                                        </svg>
+                                        <div class="bpa-panel-score-number">
+                                            <span id="bpaScoreNumber">–</span>
+                                        </div>
+                                    </div>
+                                    <div class="bpa-panel-title-block">
+                                        <div class="bpa-panel-title">Semantic Model</div>
+                                        <div class="bpa-panel-mini-stats">
+                                            <span class="bpa-mini-stat ms-critical"><span id="bpaSmCritical">0</span> Critical</span>
+                                            <span class="bpa-mini-stat ms-warning"><span id="bpaSmWarning">0</span> Warning</span>
+                                            <span class="bpa-mini-stat ms-info"><span id="bpaSmInfo">0</span> Info</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <span class="material-symbols-outlined bpa-panel-icon">schema</span>
+                            </div>
+                            <div class="bpa-panel-filter-bar">
+                                <button type="button" class="btn-filter-bpa-sm active" data-severity="all">All</button>
+                                <button type="button" class="btn-filter-bpa-sm" data-severity="critical">Critical</button>
+                                <button type="button" class="btn-filter-bpa-sm" data-severity="warning">Warning</button>
+                                <button type="button" class="btn-filter-bpa-sm" data-severity="info">Info</button>
+                                <span style="margin-left:auto;font-size:11px;color:var(--text-light)">Click a finding to navigate</span>
+                            </div>
+                            <div class="bpa-panel-findings" id="bpaFindingsSM"></div>
                         </div>
-                    </div>
 
-                    <div id="bpaFindingsContainer" style="margin-top: 16px;">
-                        <!-- Findings list injected here -->
+                        <!-- AI Readiness Panel -->
+                        <div class="bpa-panel bpa-panel-ai">
+                            <div class="bpa-panel-header">
+                                <div class="bpa-panel-header-left">
+                                    <div class="bpa-panel-ring-wrap">
+                                        <svg class="bpa-panel-ring-svg" viewBox="0 0 80 80">
+                                            <circle class="score-ring-bg" cx="40" cy="40" r="34" style="stroke-width:6"></circle>
+                                            <circle id="bpaScoreRingAI" class="score-ring-progress" cx="40" cy="40" r="34"
+                                                style="stroke-dashoffset:213.628;stroke-dasharray:213.628;stroke-width:6;"></circle>
+                                        </svg>
+                                        <div class="bpa-panel-score-number">
+                                            <span id="bpaScoreNumberAI">–</span>
+                                        </div>
+                                    </div>
+                                    <div class="bpa-panel-title-block">
+                                        <div class="bpa-panel-title">AI Readiness</div>
+                                        <div class="bpa-panel-mini-stats">
+                                            <span class="bpa-mini-stat ms-warning"><span id="bpaAiWarning">0</span> Warning</span>
+                                            <span class="bpa-mini-stat ms-info"><span id="bpaAiInfo">0</span> Info</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <span class="material-symbols-outlined bpa-panel-icon" style="color:#ffb81c">psychology</span>
+                            </div>
+                            <div class="bpa-panel-filter-bar">
+                                <button type="button" class="btn-filter-bpa-ai active" data-severity="all">All</button>
+                                <button type="button" class="btn-filter-bpa-ai" data-severity="warning">Warning</button>
+                                <button type="button" class="btn-filter-bpa-ai" data-severity="info">Info</button>
+                                <span style="margin-left:auto;font-size:11px;color:var(--text-light)">Click a finding to navigate</span>
+                            </div>
+                            <div class="bpa-panel-findings" id="bpaFindingsAI"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -771,6 +802,20 @@
                     </div>
                 </div>
 
+                <!-- Lederoversikt -->
+                <div id="view-executive" class="section-view content-panel">
+                    <h2>Lederoversikt</h2>
+                    <p class="section-subtitle">Beslutningsområder, datakilder og KPI-flyt — tilpasset ledernivå.</p>
+                    <div id="executiveContent"></div>
+                </div>
+
+                <!-- AI Context -->
+                <div id="view-ai-context" class="section-view content-panel">
+                    <h2>AI Context</h2>
+                    <p class="section-subtitle">Eksporter komplett lineage-kontekst per rapportside som JSON — klar for Dagster, Parquet og Snowflake.</p>
+                    <div id="aiContextContent"></div>
+                </div>
+
                 <!-- Report Theme -->
                 <div id="view-theme" class="section-view content-panel">
                     <h2>Report Theme</h2>
@@ -842,6 +887,8 @@
     <script src="src/ontology-view.js"></script>
     <script src="src/dashboard-generator.js"></script>
     <script src="src/fabric-scaffolder.js"></script>
+    <script src="src/lineage-exporter.js"></script>
+    <script src="src/executive-view.js"></script>
     <script src="src/app.js"></script>
 
     <!-- Sponsor Toast Script -->

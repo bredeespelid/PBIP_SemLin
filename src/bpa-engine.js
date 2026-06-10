@@ -47,41 +47,6 @@ const BPARules = [
     }
   },
   {
-    "ID": "DAX_DIVISION_COLUMNS",
-    "Name": "Avoid division operator (use DIVIDE)",
-    "Category": "DAX Expressions",
-    "Description": "It is recommended to use the DIVIDE function instead of the slash operator (/) to safely handle division by zero, unless the denominator is a constant.",
-    "Severity": 3,
-    "Scope": "Measure, Calculated Column",
-    "evalJS": (model) => {
-      const findings = [];
-      model.tables.forEach(t => {
-        if (t._isAutoDate) return;
-        const objects = [...t.measures, ...t.columns.filter(c => c.expression)];
-        
-        objects.forEach(obj => {
-          if (!obj.expression) return;
-          // Strip comments and string literals to prevent false positives
-          // (string literals can contain HTML like </div> which contains '/')
-          const cleanExpr = obj.expression
-            .replace(/\/\/.*/g, '')
-            .replace(/\/\*[\s\S]*?\*\//g, '')
-            .replace(/"(?:[^"]|"")*"/g, '""');
-
-          if (cleanExpr.includes('/') && !/\/\s*\d+(\.\d+)?\b/.test(cleanExpr) && !/[a-zA-Z0-9_ -]+\/[a-zA-Z0-9_ -]+\.md/.test(cleanExpr)) {
-            findings.push({
-              table: t.name,
-              object: obj.name,
-              type: 'DAX',
-              message: `Consider replacing the '/' operator with the DIVIDE function in [${obj.name}] for safer division-by-zero handling.`
-            });
-          }
-        });
-      });
-      return findings;
-    }
-  },
-  {
     "ID": "DAX_MEASURES_UNQUALIFIED",
     "Name": "Do not qualify measure references",
     "Category": "DAX Expressions",
@@ -444,6 +409,54 @@ const BPARules = [
       }
       return findings;
     }
+  },
+  {
+    "ID": "AI_MISSING_MEASURE_DESCRIPTION",
+    "Name": "Add description to measure (AI readiness)",
+    "Category": "AI Readiness",
+    "Description": "Measures without a description cannot be explained by an AI agent in natural language. Add a short explanation of what the measure calculates and what business question it answers.",
+    "Severity": 2,
+    "Scope": "Measure",
+    "evalJS": (model) => {
+      const findings = [];
+      model.tables.forEach(t => {
+        if (t._isAutoDate || t.isHidden) return;
+        t.measures.forEach(m => {
+          if (!m.description || !m.description.trim()) {
+            findings.push({
+              table: t.name,
+              object: m.name,
+              type: 'Measure',
+              message: `Measure [${m.name}] has no description. An AI agent will not be able to explain what it measures.`
+            });
+          }
+        });
+      });
+      return findings;
+    }
+  },
+  {
+    "ID": "AI_MISSING_TABLE_DESCRIPTION",
+    "Name": "Add description to table (AI readiness)",
+    "Category": "AI Readiness",
+    "Description": "Tables without a description make it harder for an AI agent to understand what the data represents and which business decisions it supports.",
+    "Severity": 2,
+    "Scope": "Table",
+    "evalJS": (model) => {
+      const findings = [];
+      model.tables.forEach(t => {
+        if (t._isAutoDate || t._isCalcGroup || t._isFieldParameter) return;
+        if (!t.description || !t.description.trim()) {
+          findings.push({
+            table: t.name,
+            object: t.name,
+            type: 'Table',
+            message: `Table [${t.name}] has no description. Add a sentence describing what the table contains and what it is used for.`
+          });
+        }
+      });
+      return findings;
+    }
   }
 ];
 
@@ -499,9 +512,23 @@ class BPAEngine {
         const deductionPercent = (totalPenalty / totalItems) * 100;
         const score = Math.max(0, Math.min(100, Math.round(100 - deductionPercent)));
 
+        // Separate scores: Semantic Model (all non-AI rules) vs AI Readiness
+        const AI_RULE_IDS = new Set(['AI_MISSING_MEASURE_DESCRIPTION', 'AI_MISSING_TABLE_DESCRIPTION']);
+        const semanticFindings = findings.filter(f => !AI_RULE_IDS.has(f.id));
+        const aiFindings       = findings.filter(f =>  AI_RULE_IDS.has(f.id));
+
+        const calcScore = (subset) => {
+            if (totalItems === 0) return 100;
+            let pen = 0;
+            subset.forEach(f => { pen += f.severity === 3 ? 3 : f.severity === 2 ? 1 : 0.2; });
+            return Math.max(0, Math.min(100, Math.round(100 - (pen / totalItems) * 100)));
+        };
+
         return {
             findings,
             score,
+            scoreSemanticModel: calcScore(semanticFindings),
+            scoreAIReadiness:   calcScore(aiFindings),
             stats: {
                 critical: criticalCount,
                 warning: warningCount,

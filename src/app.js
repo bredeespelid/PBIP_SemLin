@@ -1,5 +1,5 @@
-/**
- * PBIP Documenter — App Module
+﻿/**
+ * PBIP Documenter â€” App Module
  * UI logic, File System Access API integration, event handlers
  */
 
@@ -10,7 +10,7 @@ class App {
         this.reportHandle = null;
         this.reportHandles = []; // all selected report folders (when model is shared)
 
-        // ── Multi-workspace storage ──
+        // â”€â”€ Multi-workspace storage â”€â”€
         this._workspaces = [];   // [{ id, name, parsedModel, visualData, ... }]
         this._activeWsIdx = -1; // index into _workspaces for the current view
 
@@ -21,7 +21,7 @@ class App {
         this._lineageRendered = false;
         this._fieldDiagramRendered = false;
 
-        // Milestone tracking — per-dataset, not global (S8)
+        // Milestone tracking â€” per-dataset, not global (S8)
         this._visitedMilestones = new Set();
         this._dynamicPromptShown = false;
         this._milestoneDismissed = false;
@@ -31,7 +31,7 @@ class App {
         this.init();
     }
 
-    // ── Per-workspace property accessors ──────────────────────────────
+    // â”€â”€ Per-workspace property accessors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _ws() { return this._workspaces[this._activeWsIdx] ?? null; }
 
     get parsedModel()           { return this._ws()?.parsedModel ?? null; }
@@ -66,7 +66,7 @@ class App {
             return;
         }
 
-        // Persona chip selection — remember chosen persona and scroll after parse
+        // Persona chip selection â€” remember chosen persona and scroll after parse
         this._activePersona = 'dev';
         document.querySelectorAll('.persona-chip').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -189,32 +189,14 @@ class App {
             document.getElementById('warningBanner').classList.add('hidden');
         });
 
-        // BPA filter button clicks
-        document.querySelectorAll('.btn-filter-bpa').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.btn-filter-bpa').forEach(b => {
-                    b.classList.remove('active');
-                    b.style.background = '';
-                    b.style.color = '';
+        // BPA filter button clicks — per panel
+        ['sm', 'ai'].forEach(panel => {
+            document.querySelectorAll(`.btn-filter-bpa-${panel}`).forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll(`.btn-filter-bpa-${panel}`).forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    this.filterBPAPanel(panel, btn.dataset.severity);
                 });
-                btn.classList.add('active');
-                
-                const sev = btn.dataset.severity;
-                if (sev === 'all') {
-                    btn.style.background = 'var(--primary)';
-                    btn.style.color = '#fff';
-                } else if (sev === 'critical') {
-                    btn.style.background = '#da291c';
-                    btn.style.color = '#fff';
-                } else if (sev === 'warning') {
-                    btn.style.background = '#ffb81c';
-                    btn.style.color = '#111';
-                } else if (sev === 'info') {
-                    btn.style.background = '#00a3e0';
-                    btn.style.color = '#fff';
-                }
-
-                this.filterBPAFindings(sev);
             });
         });
 
@@ -228,17 +210,19 @@ class App {
             bpaBackdrop.addEventListener('click', () => this.hideBPALearningModal());
         }
 
-        // Delegated clicks for findings inside bpaFindingsContainer to open learn more modal
-        const bpaFindings = document.getElementById('bpaFindingsContainer');
-        if (bpaFindings) {
-            bpaFindings.addEventListener('click', (e) => {
-                const group = e.target.closest('.bpa-finding-group');
-                if (group) {
-                    const ruleId = group.dataset.ruleId;
-                    this.showBPALearningModal(ruleId);
-                }
-            });
-        }
+        // Delegated clicks for findings panels to open learn more modal
+        ['bpaFindingsSM', 'bpaFindingsAI'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('click', (e) => {
+                    const group = e.target.closest('.bpa-finding-group');
+                    if (group) {
+                        const ruleId = group.dataset.ruleId;
+                        this.showBPALearningModal(ruleId);
+                    }
+                });
+            }
+        });
 
         // Ontology export button
         const ontologyExportBtn = document.getElementById('ontologyExportBtn');
@@ -338,17 +322,17 @@ class App {
         this._fetchGitHubStars();
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // ANALYTICS (Plausible custom events)
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     _track(event, props) {
         if (typeof plausible === 'function') plausible(event, props ? { props } : undefined);
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // SPONSOR HELPERS
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     _showTimeSaved() {
         if (!this.parsedModel) return;
@@ -396,9 +380,9 @@ class App {
         }
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // FILE SYSTEM ACCESS
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async openFolder() {
         const btn = document.getElementById('openFolderBtn') || document.getElementById('changeFolderBtn');
@@ -417,13 +401,18 @@ class App {
             const result = await this.findPBIPStructure();
 
             if (result.workspaceCollection) {
-                // Folder contains multiple workspace sub-folders — load all at once
+                // Folder contains multiple workspace sub-folders â€” load all at once
                 await this._loadWorkspaceCollection(result.workspaceCollection);
             } else if (result.needsDiscovery) {
-                // Multiple models/reports found in same folder — show discovery panel
-                this.showDiscoveryPanel(result.models, result.reports);
+                // Auto-select all models paired with their matching report and load all at once
+                const collectionItems = result.models.map(modelHandle => {
+                    const prefix = modelHandle.name.replace('.SemanticModel', '');
+                    const reportHandle = result.reports.find(r => r.name.startsWith(prefix)) || null;
+                    return { name: prefix, modelHandle, reportHandle };
+                });
+                await this._loadWorkspaceCollection(collectionItems);
             } else {
-                // Single model found — proceed directly
+                // Single model found â€” proceed directly
                 this._proceedAfterSelection();
             }
 
@@ -475,7 +464,7 @@ class App {
         }
 
         if (allModels.length === 0) {
-            // No direct .SemanticModel found — scan one level deeper for a
+            // No direct .SemanticModel found â€” scan one level deeper for a
             // "workspaces" folder that contains workspace sub-folders, each
             // holding their own .SemanticModel (and optional .Report).
             const collectionItems = [];
@@ -507,14 +496,14 @@ class App {
             const matchingReports = allReports.filter(r => r.name.startsWith(modelPrefix));
 
             if (matchingReports.length <= 1) {
-                // 0 or 1 matching report — auto-proceed without discovery
+                // 0 or 1 matching report â€” auto-proceed without discovery
                 this.reportHandle = matchingReports[0] || null;
                 return { needsDiscovery: false };
             }
-            // Multiple matching reports — show discovery so user can pick
+            // Multiple matching reports â€” show discovery so user can pick
         }
 
-        // Multiple models or multiple matching reports — show discovery
+        // Multiple models or multiple matching reports â€” show discovery
         return { needsDiscovery: true, models: allModels, reports: allReports };
     }
 
@@ -562,7 +551,7 @@ class App {
             }
             this.semanticModelHandle = models[parseInt(selectedModelIdx)];
 
-            // Get selected report(s) — collect ALL checked, not just the first
+            // Get selected report(s) â€” collect ALL checked, not just the first
             const reportList = document.getElementById('discoveryReportList');
             const checkedReports = reportList.querySelectorAll('input:checked');
             this.reportHandles = Array.from(checkedReports).map(inp => reports[parseInt(inp.value)]);
@@ -639,7 +628,7 @@ class App {
         document.getElementById('folderInfo').classList.remove('hidden');
         document.getElementById('folderName').textContent = this.folderHandle.name;
 
-        this.showLoading(true, `Loading ${items.length} workspaces…`);
+        this.showLoading(true, `Loading ${items.length} workspacesâ€¦`);
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
             this.semanticModelHandle = item.modelHandle;
@@ -647,15 +636,47 @@ class App {
             this.reportHandles = item.reportHandle ? [item.reportHandle] : [];
             this.showLoading(true, `Loading workspace ${i + 1} / ${items.length}: ${item.name}`);
             await this.parseModel();
+            // Store workspace folder name ("md") and report/model name for exports
+            const loadedWs = this._workspaces[this._activeWsIdx];
+            if (loadedWs) {
+                loadedWs._wsFolder    = item.name;
+                loadedWs._reportName  = item.modelHandle.name.replace(/\.SemanticModel$/i, '').trim();
+            }
         }
         this.showLoading(false);
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // STATE RESET
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    // ── WORKSPACE METHODS ────────────────────────────────────────────
+    // â”€â”€ WORKSPACE METHODS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    _renderSidebarWorkspaceList() {
+        const section = document.getElementById('sidebarWorkspaceSection');
+        const list = document.getElementById('sidebarWorkspaceList');
+        if (!section || !list) return;
+        if (this._workspaces.length <= 1) {
+            section.classList.add('hidden');
+            return;
+        }
+        section.classList.remove('hidden');
+        list.innerHTML = this._workspaces.map((ws, idx) => {
+            const active = idx === this._activeWsIdx ? ' active' : '';
+            const label = ws.name.length > 28 ? ws.name.slice(0, 26) + 'â€¦' : ws.name;
+            return `<div class="sidebar-ws-item${active}" data-ws-idx="${idx}" title="${this._esc(ws.name)}">
+                <span class="material-symbols-outlined">dataset</span>
+                ${this._esc(label)}
+            </div>`;
+        }).join('');
+        list.querySelectorAll('.sidebar-ws-item').forEach(el => {
+            el.addEventListener('click', () => {
+                const idx = parseInt(el.dataset.wsIdx, 10);
+                if (idx !== this._activeWsIdx) this._switchWorkspace(idx);
+                else this._renderSidebarWorkspaceList();
+            });
+        });
+    }
 
     _renderWorkspaceTabs() {
         const bar = document.getElementById('workspaceTabBar');
@@ -672,7 +693,7 @@ class App {
             const active = idx === this._activeWsIdx ? ' active' : '';
             html += `<button class="ws-tab${active}" data-ws-idx="${idx}" title="${this._esc(ws.name)}">
                 <span class="material-symbols-outlined" style="font-size:14px;flex-shrink:0">dataset</span>
-                ${this._esc(ws.name.length > 22 ? ws.name.slice(0, 20) + '…' : ws.name)}
+                ${this._esc(ws.name.length > 22 ? ws.name.slice(0, 20) + 'â€¦' : ws.name)}
                 <span class="ws-tab-close" data-ws-close="${idx}" title="Close">&times;</span>
             </button>`;
         });
@@ -749,7 +770,7 @@ class App {
         if (banner) {
             if (ws?.parseErrors?.length > 0) {
                 document.getElementById('warningBannerText').textContent =
-                    `Parsed with ${ws.parseErrors.length} warning${ws.parseErrors.length !== 1 ? 's' : ''} — some items may be incomplete`;
+                    `Parsed with ${ws.parseErrors.length} warning${ws.parseErrors.length !== 1 ? 's' : ''} â€” some items may be incomplete`;
                 banner.classList.remove('hidden');
             } else {
                 banner.classList.add('hidden');
@@ -761,7 +782,7 @@ class App {
         this.buildSidebar();
         this.renderOverview();
         this.showSection('overview');
-        this._renderWorkspaceTabs();
+        this._renderWorkspaceTabs(); this._renderSidebarWorkspaceList();
     }
 
     _closeWorkspace(idx) {
@@ -769,7 +790,7 @@ class App {
         this._workspaces.splice(idx, 1);
 
         if (this._workspaces.length === 0) {
-            // No workspaces left — return to landing
+            // No workspaces left â€” return to landing
             this._activeWsIdx = -1;
             document.getElementById('appBody').classList.add('hidden');
             document.getElementById('statsBar').classList.add('hidden');
@@ -785,7 +806,7 @@ class App {
         this._switchWorkspace(newIdx);
     }
 
-    // ── END WORKSPACE METHODS ─────────────────────────────────────────
+    // â”€â”€ END WORKSPACE METHODS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     _resetState() {
         // Lazy-render flags
@@ -842,12 +863,12 @@ class App {
         if (typeof MExpressionParser !== 'undefined') MExpressionParser._declaredParams = null;
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // PARSING
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async parseModel() {
-        // ── Workspace management ─────────────────────────────────────
+        // â”€â”€ Workspace management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Re-use existing workspace if same folder; otherwise create new
         const folderKey = this.semanticModelHandle?.name || String(Date.now());
         let wsIdx = this._workspaces.findIndex(w => w._folderKey === folderKey);
@@ -946,7 +967,7 @@ class App {
             this.renderOverview();
             this._navigateByPersona();
             this.showSection('overview');
-            this._renderWorkspaceTabs();
+            this._renderWorkspaceTabs(); this._renderSidebarWorkspaceList();
 
             this._track('Model Parsed', { tables: this.parsedModel.tables.length, measures: this.parsedModel.tables.reduce((s, t) => s + t.measures.length, 0) });
 
@@ -961,7 +982,7 @@ class App {
             if (this.parseErrors.length > 0) {
                 const banner = document.getElementById('warningBanner');
                 document.getElementById('warningBannerText').textContent =
-                    `Parsed with ${this.parseErrors.length} warning${this.parseErrors.length !== 1 ? 's' : ''} — some items may be incomplete`;
+                    `Parsed with ${this.parseErrors.length} warning${this.parseErrors.length !== 1 ? 's' : ''} â€” some items may be incomplete`;
                 banner.classList.remove('hidden');
             }
 
@@ -974,9 +995,9 @@ class App {
         }
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // DEMO / SAMPLE DATA MODE
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     exportSampleData() {
         if (!this.parsedModel) {
@@ -1009,7 +1030,7 @@ class App {
         a.click();
         URL.revokeObjectURL(a.href);
 
-        this.showToast(`Downloaded contoso.json — place it in the samples/ folder to enable demo mode.`, 'success');
+        this.showToast(`Downloaded contoso.json â€” place it in the samples/ folder to enable demo mode.`, 'success');
     }
 
     async loadSampleData() {
@@ -1017,7 +1038,7 @@ class App {
         const origLabel = btn ? btn.innerHTML : '';
         if (btn) {
             btn.disabled = true;
-            btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle">hourglass_top</span> Loading sample…';
+            btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle">hourglass_top</span> Loading sampleâ€¦';
         }
 
         try {
@@ -1084,7 +1105,7 @@ class App {
             this.buildSidebar();
             this.renderOverview();
             this.showSection('overview');
-            this._renderWorkspaceTabs();
+            this._renderWorkspaceTabs(); this._renderSidebarWorkspaceList();
 
             this._track('Demo Loaded');
 
@@ -1103,7 +1124,7 @@ class App {
 
         } catch (err) {
             const msg = err.name === 'TypeError' && err.message.includes('fetch')
-                ? 'Sample data not ready. Open your Contoso folder → click "Export as demo data" in the download bar → save as samples/contoso.json.'
+                ? "Sample data not ready. Open your Contoso folder → click \"Export as demo data\" in the download bar → save as samples/contoso.json."
                 : 'Could not load sample data: ' + err.message;
             this.showToast(msg, 'error');
             console.error('loadSampleData error:', err);
@@ -1263,9 +1284,9 @@ class App {
         return themes;
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // UI UPDATES
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     updateStats() {
         const m = this.parsedModel;
@@ -1331,6 +1352,7 @@ class App {
         const pageSectionEl = document.getElementById('sidebarReportPagesSection');
         if (this.visualData && this.visualData.pages.length > 0) {
             pageSectionEl.classList.remove('hidden');
+            pageSectionEl.classList.add('collapsed');
             document.getElementById('sidebarPageCount').textContent = this.visualData.pages.length;
             const pageList = document.getElementById('sidebarPageList');
             pageList.innerHTML = this.visualData.pages
@@ -1344,16 +1366,30 @@ class App {
         const SIDEBAR_INITIAL_BATCH = 50;
         const tableList = document.getElementById('sidebarTableList');
         const tables = m.tables;
+
+        // Build set of tables with AI-readiness BPA findings
+        const aiFlags = new Set(
+            (this.bpaResults?.findings || [])
+                .filter(f => f.id === 'AI_MISSING_TABLE_DESCRIPTION' || f.id === 'AI_MISSING_MEASURE_DESCRIPTION')
+                .map(f => f.table)
+        );
+        const renderTableItem = t => {
+            const flag = aiFlags.has(t.name)
+                ? `<span class="sidebar-ai-flag" title="Mangler beskrivelse for AI">●</span>`
+                : '';
+            return `<div class="sidebar-item" data-table="${this._esc(t.name)}">${this._esc(t.name)}${flag}</div>`;
+        };
+
         if (tables.length > SIDEBAR_INITIAL_BATCH) {
             this._remainingSidebarTables = tables.slice(SIDEBAR_INITIAL_BATCH);
             tableList.innerHTML = tables.slice(0, SIDEBAR_INITIAL_BATCH)
-                .map(t => `<div class="sidebar-item" data-table="${this._esc(t.name)}">${this._esc(t.name)}</div>`)
+                .map(renderTableItem)
                 .join('') +
                 `<button class="btn-sidebar-load-more">Show ${this._remainingSidebarTables.length} more tables</button>`;
         } else {
             this._remainingSidebarTables = null;
             tableList.innerHTML = tables
-                .map(t => `<div class="sidebar-item" data-table="${this._esc(t.name)}">${this._esc(t.name)}</div>`)
+                .map(renderTableItem)
                 .join('');
         }
 
@@ -1496,7 +1532,7 @@ class App {
         if (section === 'relationships' && !this._diagramRendered) {
             this._diagramRendered = true;
             const diagEl = document.getElementById('relationshipsDiagram');
-            if (diagEl) diagEl.innerHTML = '<div class="loading"><div class="spinner"></div>Building diagram…</div>';
+            if (diagEl) diagEl.innerHTML = '<div class="loading"><div class="spinner"></div>Building diagramâ€¦</div>';
             requestAnimationFrame(() => requestAnimationFrame(() => this.renderRelationshipDiagram()));
         }
         if (section === 'roles') this.renderRoles();
@@ -1508,6 +1544,8 @@ class App {
         if (section === 'dynamic-features') this.renderDynamicFeaturesView();
         if (section === 'theme') this.renderThemeView();
         if (section === 'ontology') this.renderOntologyView();
+        if (section === 'executive') this.renderExecutiveView();
+        if (section === 'ai-context') this.renderAIContextView();
 
         // Milestone tracking for sponsor prompt
         this._trackMilestone(section);
@@ -1534,7 +1572,7 @@ class App {
         // Add breadcrumb back link
         const breadcrumb = document.getElementById('tableDetailBreadcrumb');
         if (breadcrumb) {
-            breadcrumb.innerHTML = `<a href="#" class="breadcrumb-link" data-section="tables">← Tables</a>`;
+            breadcrumb.innerHTML = `<a href="#" class="breadcrumb-link" data-section="tables">â† Tables</a>`;
             breadcrumb.querySelector('.breadcrumb-link').addEventListener('click', (e) => {
                 e.preventDefault();
                 this.showSection('tables');
@@ -1616,7 +1654,7 @@ class App {
                         </div>`;
                     if (physLabel) {
                         html += `<div class="source-meta-row" style="margin-top:6px">
-                            Physical table: <button type="button" class="ds-phys-label" title="Trace to visuals" onclick="app._tracePhysicalTable(${JSON.stringify(te.physicalSchema||'')}, ${JSON.stringify(te.physicalTable||'')})">${this._esc(physLabel)} <span style="font-size:10px;opacity:0.7">↗</span></button>
+                            Physical table: <button type="button" class="ds-phys-label" title="Trace to visuals" onclick="app._tracePhysicalTable(${JSON.stringify(te.physicalSchema||'')}, ${JSON.stringify(te.physicalTable||'')})">${this._esc(physLabel)} <span style="font-size:10px;opacity:0.7">â†—</span></button>
                         </div>`;
                     }
                     if (te.renames && te.renames.length > 0) {
@@ -1682,7 +1720,7 @@ class App {
                 html += `<span>Rolling window: <strong>${rp.rollingWindowPeriods} ${this._esc(rp.rollingWindowGranularity)}${rp.rollingWindowPeriods !== 1 ? 's' : ''}</strong></span>`;
             }
             if (rp.incrementalPeriods != null && rp.incrementalGranularity) {
-                html += `<span>· Incremental: <strong>${rp.incrementalPeriods} ${this._esc(rp.incrementalGranularity)}${rp.incrementalPeriods !== 1 ? 's' : ''}</strong></span>`;
+                html += `<span>Â· Incremental: <strong>${rp.incrementalPeriods} ${this._esc(rp.incrementalGranularity)}${rp.incrementalPeriods !== 1 ? 's' : ''}</strong></span>`;
             }
             html += `</div>`;
             if (rp.sourceExpression) {
@@ -1697,7 +1735,7 @@ class App {
             html += `</div>`;
         }
 
-        // M Steps — parsed Power Query steps
+        // M Steps â€” parsed Power Query steps
         if (this.lineageEngine && this.lineageEngine.mSteps) {
             const steps = this.lineageEngine.mSteps.get(tableName);
             if (steps && steps.length > 0) {
@@ -1705,7 +1743,7 @@ class App {
                 html += `<ol class="m-steps-list">`;
                 for (const step of steps) {
                     const kindClass = `m-step-kind-${step.kind.toLowerCase()}`;
-                    const truncated = step.exprText.length > 200 ? step.exprText.slice(0, 200) + '…' : step.exprText;
+                    const truncated = step.exprText.length > 200 ? step.exprText.slice(0, 200) + 'â€¦' : step.exprText;
                     html += `<li class="m-step-item">
                         <span class="m-step-name">${this._esc(step.name)}</span>
                         <span class="m-step-kind ${kindClass}">${this._esc(step.kind)}</span>
@@ -1723,7 +1761,7 @@ class App {
                 const stateLabel = p.lastRefreshState === 'Exception'
                     ? `<span class="badge" style="background:#ffebee;color:#c62828;margin-left:8px">Last refresh: Exception</span>`
                     : p.lastRefreshState ? `<span class="badge" style="background:#f1f8e9;color:#33691e;margin-left:8px">Last refresh: ${this._esc(p.lastRefreshState)}</span>` : '';
-                html += `<p><strong>${this._esc(p.name)}</strong> — mode: ${p.mode || 'default'}${stateLabel}</p>`;
+                html += `<p><strong>${this._esc(p.name)}</strong> â€” mode: ${p.mode || 'default'}${stateLabel}</p>`;
                 if (p.source) {
                     const lines = p.source.split('\n');
                     const shouldTruncate = lines.length > 5;
@@ -1818,7 +1856,7 @@ class App {
                     <span class="material-symbols-outlined insight-card-icon">tune</span>
                     <div class="insight-card-text">
                         <strong>${dynamicSummary.fieldParams.length} Field Parameter${dynamicSummary.fieldParams.length !== 1 ? 's' : ''}</strong>
-                        Visuals have hidden flexibility — ${totalFpFields} switchable field${totalFpFields !== 1 ? 's' : ''} not shown in JSON.
+                        Visuals have hidden flexibility â€” ${totalFpFields} switchable field${totalFpFields !== 1 ? 's' : ''} not shown in JSON.
                     </div>
                 </div>`;
             }
@@ -1869,7 +1907,7 @@ class App {
                             <h4>PBIP Documenter</h4>
                             <div class="before-after-reveal">
                                 <span class="badge badge-field-param">Field Parameter</span>
-                                <strong>'${this._esc(fp.table)}'</strong> — ${fp.items.length} available fields:
+                                <strong>'${this._esc(fp.table)}'</strong> â€” ${fp.items.length} available fields:
                                 <div class="fp-items-list" style="margin-top:6px">
                                     ${fp.items.map(i => `<span class="fp-item-chip">'${this._esc(i.table)}'[${this._esc(i.column)}]</span>`).join('')}
                                 </div>
@@ -2135,6 +2173,20 @@ class App {
         this.ontologyRenderer.render(container);
     }
 
+    renderExecutiveView() {
+        const container = document.getElementById('executiveContent');
+        if (!container || this._workspaces.length === 0) return;
+        const workspaces = this._workspaces.filter(ws => ws.parsedModel);
+        ExecutiveView.renderLederoversikt(container, workspaces);
+    }
+
+    renderAIContextView() {
+        const container = document.getElementById('aiContextContent');
+        if (!container || this._workspaces.length === 0) return;
+        const workspaces = this._workspaces.filter(ws => ws.parsedModel);
+        ExecutiveView.renderAIContext(container, workspaces);
+    }
+
     _bindTraceButtonDelegation() {
         if (this._traceDelegationBound) return;
         this._traceDelegationBound = true;
@@ -2261,7 +2313,7 @@ class App {
         for (const visual of this.visualData.visuals) {
             const opt = document.createElement('option');
             opt.value = `${visual.pageName}|||${visual.visualName}`;
-            opt.textContent = `${visual.pageName} — ${visual.visualName}`;
+            opt.textContent = `${visual.pageName} â€” ${visual.visualName}`;
             sel.appendChild(opt);
         }
     }
@@ -2321,7 +2373,7 @@ class App {
         renderer.renderSourceTrace(container, table, schema || null);
     }
 
-    // ── Lineage Detail Panel ──
+    // â”€â”€ Lineage Detail Panel â”€â”€
 
     _showLineageDetail(type, id) {
         const panel = document.getElementById('lineageDetailPanel');
@@ -2352,7 +2404,7 @@ class App {
             if (table && table.columns.length > 0) {
                 colHtml = '<div class="lineage-detail-section"><h4>Columns</h4><table><tr><th>Name</th><th>Type</th><th>Hidden</th></tr>';
                 for (const col of table.columns) {
-                    colHtml += `<tr><td>${esc(col.name)}</td><td>${esc(col.dataType || '—')}</td><td>${col.isHidden ? 'Yes' : ''}</td></tr>`;
+                    colHtml += `<tr><td>${esc(col.name)}</td><td>${esc(col.dataType || 'â€”')}</td><td>${col.isHidden ? 'Yes' : ''}</td></tr>`;
                 }
                 colHtml += '</table></div>';
             }
@@ -2363,7 +2415,7 @@ class App {
             if (rels.length > 0) {
                 relHtml = '<div class="lineage-detail-section"><h4>Relationships</h4><table><tr><th>From</th><th>To</th><th>Type</th></tr>';
                 for (const r of rels) {
-                    const card = [r.fromCardinality, r.toCardinality].filter(Boolean).join(':') || '—';
+                    const card = [r.fromCardinality, r.toCardinality].filter(Boolean).join(':') || 'â€”';
                     relHtml += `<tr><td>${esc(r.fromTable)}[${esc(r.fromColumn)}]</td><td>${esc(r.toTable)}[${esc(r.toColumn)}]</td><td>${card}${r.isActive === false ? ' (inactive)' : ''}</td></tr>`;
                 }
                 relHtml += '</table></div>';
@@ -2423,7 +2475,7 @@ class App {
             if (usage && usage.length > 0) {
                 html += '<div class="lineage-detail-section"><h4>Used By Visuals</h4><div class="lineage-detail-chips">';
                 for (const u of usage) {
-                    html += `<span class="lineage-detail-chip visual">${esc(u.pageName)} — ${esc(u.visualName)}</span>`;
+                    html += `<span class="lineage-detail-chip visual">${esc(u.pageName)} â€” ${esc(u.visualName)}</span>`;
                 }
                 html += '</div></div>';
             }
@@ -2440,7 +2492,7 @@ class App {
 
             if (col) {
                 html += `<div class="lineage-detail-section"><h4>Properties</h4><table>`;
-                html += `<tr><td><strong>Data Type</strong></td><td>${esc(col.dataType || '—')}</td></tr>`;
+                html += `<tr><td><strong>Data Type</strong></td><td>${esc(col.dataType || 'â€”')}</td></tr>`;
                 if (col.sourceColumn) html += `<tr><td><strong>Source Column</strong></td><td>${esc(col.sourceColumn)}</td></tr>`;
                 if (col.formatString) html += `<tr><td><strong>Format</strong></td><td>${esc(col.formatString)}</td></tr>`;
                 if (col.isHidden) html += `<tr><td><strong>Hidden</strong></td><td>Yes</td></tr>`;
@@ -2464,7 +2516,7 @@ class App {
             if (usage && usage.length > 0) {
                 html += '<div class="lineage-detail-section"><h4>Used By Visuals</h4><div class="lineage-detail-chips">';
                 for (const u of usage) {
-                    html += `<span class="lineage-detail-chip visual">${esc(u.pageName)} — ${esc(u.visualName)}</span>`;
+                    html += `<span class="lineage-detail-chip visual">${esc(u.pageName)} â€” ${esc(u.visualName)}</span>`;
                 }
                 html += '</div></div>';
             }
@@ -2492,7 +2544,7 @@ class App {
 
             if (node) {
                 html += `<div class="lineage-detail-section"><table>`;
-                html += `<tr><td><strong>Type</strong></td><td>${esc(node.visualType || '—')}</td></tr>`;
+                html += `<tr><td><strong>Type</strong></td><td>${esc(node.visualType || 'â€”')}</td></tr>`;
                 html += `<tr><td><strong>Page</strong></td><td>${esc(pageName)}</td></tr>`;
                 html += '</table></div>';
             }
@@ -2548,7 +2600,7 @@ class App {
                 html += '<div class="lineage-detail-section"><h4>Used By Visuals</h4><div class="lineage-detail-chips">';
                 for (const e of visualEdges) {
                     const vn = engine.nodes.get(e.from);
-                    if (vn) html += `<span class="lineage-detail-chip visual">${esc(vn.pageName)} — ${esc(vn.name)}</span>`;
+                    if (vn) html += `<span class="lineage-detail-chip visual">${esc(vn.pageName)} â€” ${esc(vn.name)}</span>`;
                 }
                 html += '</div></div>';
             }
@@ -2589,7 +2641,7 @@ class App {
                 html += '<div class="lineage-detail-section"><h4>Used By Visuals</h4><div class="lineage-detail-chips">';
                 for (const e of visualEdges) {
                     const vn = engine.nodes.get(e.from);
-                    if (vn) html += `<span class="lineage-detail-chip visual">${esc(vn.pageName)} — ${esc(vn.name)}</span>`;
+                    if (vn) html += `<span class="lineage-detail-chip visual">${esc(vn.pageName)} â€” ${esc(vn.name)}</span>`;
                 }
                 html += '</div></div>';
             }
@@ -2612,7 +2664,7 @@ class App {
 
             if (node) {
                 html += '<div class="lineage-detail-section"><table>';
-                html += `<tr><td><strong>Type</strong></td><td>${esc(node.sourceType || node.type || '—')}</td></tr>`;
+                html += `<tr><td><strong>Type</strong></td><td>${esc(node.sourceType || node.type || 'â€”')}</td></tr>`;
                 const server = node.serverResolved || node.server;
                 if (server) html += `<tr><td><strong>Server</strong></td><td>${esc(server)}</td></tr>`;
                 const db = node.databaseResolved || node.database;
@@ -2680,7 +2732,7 @@ class App {
         panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    // ── Column Impact Tab ──
+    // â”€â”€ Column Impact Tab â”€â”€
 
     _populateTableSelect() {
         const sel = document.getElementById('lineageTableSelect');
@@ -2725,9 +2777,9 @@ class App {
             return;
         }
 
-        let html = `<p class="section-subtitle">Data engineer view — physical tables loaded from each source, column renames, and downstream consumers.</p>
+        let html = `<p class="section-subtitle">Data engineer view â€” physical tables loaded from each source, column renames, and downstream consumers.</p>
         <div class="ds-filter-bar">
-            <input type="text" id="dsFilterInput" placeholder="Filter by connector type, server, database…" class="ds-filter-input" oninput="app._filterDataSources(this.value)">
+            <input type="text" id="dsFilterInput" placeholder="Filter by connector type, server, databaseâ€¦" class="ds-filter-input" oninput="app._filterDataSources(this.value)">
             <div class="ds-filter-chips" id="dsFilterChips">
                 ${[...new Set(sources.map(s => s.type))].map(t => `<button type="button" class="ds-filter-chip" onclick="app._filterDataSourcesByType(this, ${JSON.stringify(t)})">${this._esc(t)}</button>`).join('')}
                 ${sources.some(s => s.gatewayRequired === true) ? `<button type="button" class="ds-filter-chip" onclick="app._filterDataSourcesByGateway(this)">Gateway Required</button>` : ''}
@@ -2755,7 +2807,7 @@ class App {
                 html += ` <span class="badge" style="background:#fff3e0;color:#e65100;margin-left:4px">Native SQL</span>`;
                 if (server) html += ` <code style="font-size:12px;font-weight:normal">${this._esc(server)}</code>`;
                 if (db)     html += ` <span style="color:var(--text-secondary);font-size:12px">/ ${this._esc(db)}</span>`;
-                if (src.nativeQuery) html += ` <details style="display:inline-block;font-size:11px;margin-left:8px"><summary style="cursor:pointer;color:var(--text-secondary)">SQL</summary><code style="display:block;margin-top:4px;font-size:11px;white-space:pre-wrap">${this._esc(src.nativeQuery.slice(0, 500))}${src.nativeQuery.length > 500 ? '…' : ''}</code></details>`;
+                if (src.nativeQuery) html += ` <details style="display:inline-block;font-size:11px;margin-left:8px"><summary style="cursor:pointer;color:var(--text-secondary)">SQL</summary><code style="display:block;margin-top:4px;font-size:11px;white-space:pre-wrap">${this._esc(src.nativeQuery.slice(0, 500))}${src.nativeQuery.length > 500 ? 'â€¦' : ''}</code></details>`;
             } else {
                 if (server) html += ` <code style="font-size:12px;font-weight:normal">${this._esc(server)}</code>`;
                 if (db)     html += ` <span style="color:var(--text-secondary);font-size:12px">/ ${this._esc(db)}</span>`;
@@ -2781,7 +2833,7 @@ class App {
                     const physLabel = [t.physicalSchema, t.physicalTable].filter(Boolean).join('.');
                     html += `<div class="ds-physical-row">
                         <span class="ds-model-table" onclick="app.navigateTo('tables', ${JSON.stringify(t.name)})" title="Click to open table">${this._esc(t.name)}</span>`;
-                    if (physLabel) html += `<span class="ds-arrow">←</span><button type="button" class="ds-phys-label" title="Trace ${this._esc(physLabel)} to visuals" onclick="app._tracePhysicalTable(${JSON.stringify(t.physicalSchema||'')}, ${JSON.stringify(t.physicalTable||'')})">${this._esc(physLabel)} <span style="font-size:10px;opacity:0.7">↗</span></button>`;
+                    if (physLabel) html += `<span class="ds-arrow">â†</span><button type="button" class="ds-phys-label" title="Trace ${this._esc(physLabel)} to visuals" onclick="app._tracePhysicalTable(${JSON.stringify(t.physicalSchema||'')}, ${JSON.stringify(t.physicalTable||'')})">${this._esc(physLabel)} <span style="font-size:10px;opacity:0.7">â†—</span></button>`;
                     if (t.renames.length > 0) {
                         html += ` <details class="ds-renames-details"><summary>${t.renames.length} rename${t.renames.length !== 1 ? 's' : ''}</summary><ul>`;
                         for (const r of t.renames) {
@@ -2853,9 +2905,9 @@ class App {
         else document.querySelectorAll('#dsFilterChips .ds-filter-chip').forEach(c => { if (c !== btn) c.classList.remove('active'); });
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // DYNAMIC FEATURES VIEW
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     _getDynamicFeaturesSummary() {
         if (!this.parsedModel || !this.docGenerator) return { fieldParams: [], calcGroups: [], total: 0 };
@@ -3017,7 +3069,7 @@ class App {
         // Blog cross-link
         html += `<div class="dynamic-learn-more">
             <span class="material-symbols-outlined" style="font-size:16px">menu_book</span>
-            <a href="https://powerbimvp.com/posts/pbir-json-hidden-gaps-field-parameters.html" target="_blank">Learn more: PBIR JSON Doesn't Tell the Full Story — Hidden Gaps in Field Parameters</a>
+            <a href="https://powerbimvp.com/posts/pbir-json-hidden-gaps-field-parameters.html" target="_blank">Learn more: PBIR JSON Doesn't Tell the Full Story â€” Hidden Gaps in Field Parameters</a>
         </div>`;
 
         content.innerHTML = html;
@@ -3056,9 +3108,9 @@ class App {
         this.detailedERDRenderer.render(this.parsedModel.tables, this.parsedModel.relationships);
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // REPORT PAGES & VISUAL EXPLORER
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     renderReportPagesOverview() {
         if (!this.visualData) return;
@@ -3098,7 +3150,7 @@ class App {
         // Add breadcrumb back link
         const pageBreadcrumb = document.getElementById('pageDetailBreadcrumb');
         if (pageBreadcrumb) {
-            pageBreadcrumb.innerHTML = `<a href="#" class="breadcrumb-link" data-section="report-pages">← Report Pages</a>`;
+            pageBreadcrumb.innerHTML = `<a href="#" class="breadcrumb-link" data-section="report-pages">â† Report Pages</a>`;
             pageBreadcrumb.querySelector('.breadcrumb-link').addEventListener('click', (e) => {
                 e.preventDefault();
                 this.showSection('report-pages');
@@ -3191,7 +3243,7 @@ class App {
                     <span class="material-symbols-outlined">auto_stories</span>
                     ${this._esc(page.displayName)}
                     <span style="font-size:12px;font-weight:400;color:var(--text-secondary);margin-left:auto">
-                        ${dataBound.length} data-bound · ${visuals.length - dataBound.length} decoration
+                        ${dataBound.length} data-bound Â· ${visuals.length - dataBound.length} decoration
                     </span>
                     <span class="material-symbols-outlined chevron-icon">expand_more</span>
                 </div>
@@ -3458,10 +3510,10 @@ class App {
                         const selectedIdx = fpSel?.selectedIndex ?? null;
                         const selectedItem = (selectedIdx !== null && fpItems[selectedIdx]) ? fpItems[selectedIdx] : null;
                         html += `<div class="visual-special-block fp-block">
-                            <div class="visual-special-header"><span class="badge badge-field-param"><span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle">tune</span> Field Parameter</span> <strong>'${this._esc(t)}'</strong> — ${fpItems.length} available field${fpItems.length !== 1 ? 's' : ''}:</div>
+                            <div class="visual-special-header"><span class="badge badge-field-param"><span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle">tune</span> Field Parameter</span> <strong>'${this._esc(t)}'</strong> â€” ${fpItems.length} available field${fpItems.length !== 1 ? 's' : ''}:</div>
                             <div class="dynamic-card-insight" style="margin:6px 0 8px">
                                 <span class="material-symbols-outlined" style="font-size:14px;color:#e65100">visibility_off</span>
-                                <span>PBIR JSON shows only the last-saved selection. Semantic model defines ${fpItems.length} field${fpItems.length !== 1 ? 's' : ''} — user can switch at runtime.</span>
+                                <span>PBIR JSON shows only the last-saved selection. Semantic model defines ${fpItems.length} field${fpItems.length !== 1 ? 's' : ''} â€” user can switch at runtime.</span>
                             </div>`;
                         if (selectedItem) {
                             html += `<div style="margin:4px 0 6px;font-size:12px"><strong>Last selected:</strong> <span class="fp-item-chip fp-item-selected">'${this._esc(selectedItem.table)}'[${this._esc(selectedItem.column)}]</span></div>`;
@@ -3471,14 +3523,14 @@ class App {
                         for (let i = 0; i < fpItems.length; i++) {
                             const item = fpItems[i];
                             const isSelected = i === selectedIdx;
-                            html += `<span class="fp-item-chip${isSelected ? ' fp-item-selected' : ''}" title="${isSelected ? 'Last selected' : ''}">'${this._esc(item.table)}'[${this._esc(item.column)}]${isSelected ? ' ✓' : ''}</span>`;
+                            html += `<span class="fp-item-chip${isSelected ? ' fp-item-selected' : ''}" title="${isSelected ? 'Last selected' : ''}">'${this._esc(item.table)}'[${this._esc(item.column)}]${isSelected ? ' âœ“' : ''}</span>`;
                         }
                         html += `</div></div>`;
                     } else {
                         const cgItems = this.docGenerator._getCalculationGroupItems(t);
                         if (cgItems !== null && cgItems.length > 0) {
                             html += `<div class="visual-special-block cg-block">
-                                <div class="visual-special-header"><span class="badge badge-calc"><span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle">calculate</span> Calc Group</span> <strong>'${this._esc(t)}'</strong> — ${cgItems.length} item${cgItems.length !== 1 ? 's' : ''}:</div>
+                                <div class="visual-special-header"><span class="badge badge-calc"><span class="material-symbols-outlined" style="font-size:12px;vertical-align:middle">calculate</span> Calc Group</span> <strong>'${this._esc(t)}'</strong> â€” ${cgItems.length} item${cgItems.length !== 1 ? 's' : ''}:</div>
                                 <div class="dynamic-card-insight" style="margin:6px 0 8px">
                                     <span class="material-symbols-outlined" style="font-size:14px;color:#e65100">visibility_off</span>
                                     <span>JSON shows: <code>'${this._esc(t)}'[Name]</code> (ordinary column). Reality: calculation group with ${cgItems.length} DAX transformation${cgItems.length !== 1 ? 's' : ''} modifying co-visual measures.</span>
@@ -3543,9 +3595,9 @@ class App {
         });
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // MEASURE CARD RENDERING
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     _renderMeasureCard(measure, tableName) {
         let html = `<div class="measure-card">
@@ -3556,8 +3608,8 @@ class App {
         }
 
         html += '<div class="measure-meta">';
-        if (measure.displayFolder) html += `<span>📁 ${this._esc(measure.displayFolder)}</span>`;
-        if (measure.formatString) html += `<span>📐 ${this._esc(measure.formatString)}</span>`;
+        if (measure.displayFolder) html += `<span>ðŸ“ ${this._esc(measure.displayFolder)}</span>`;
+        if (measure.formatString) html += `<span>ðŸ“ ${this._esc(measure.formatString)}</span>`;
         html += '</div>';
 
         if (measure.expression) {
@@ -3615,19 +3667,19 @@ class App {
         return html;
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // DOWNLOADS
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     downloadMarkdown(scope = 'all', btn = null) {
         this._track('Download', { format: 'markdown', scope });
         if (!this.docGenerator) return;
         if (scope === 'visuals' && (!this.visualData || this.visualData.pages.length === 0)) {
-            this.showToast('No report data — include a report folder to export visuals', 'error');
+            this.showToast('No report data â€” include a report folder to export visuals', 'error');
             return;
         }
         const originalHTML = btn ? btn.innerHTML : null;
-        if (btn) { btn.innerHTML = 'Generating…'; btn.disabled = true; }
+        if (btn) { btn.innerHTML = 'Generatingâ€¦'; btn.disabled = true; }
         requestAnimationFrame(() => {
             try {
                 const md = this.docGenerator.generateMarkdown(scope, this.visualData);
@@ -3647,11 +3699,11 @@ class App {
         this._track('Download', { format: 'html', scope });
         if (!this.docGenerator) return;
         if (scope === 'visuals' && (!this.visualData || this.visualData.pages.length === 0)) {
-            this.showToast('No report data — include a report folder to export visuals', 'error');
+            this.showToast('No report data â€” include a report folder to export visuals', 'error');
             return;
         }
         const originalHTML = btn ? btn.innerHTML : null;
-        if (btn) { btn.innerHTML = 'Generating…'; btn.disabled = true; }
+        if (btn) { btn.innerHTML = 'Generatingâ€¦'; btn.disabled = true; }
         requestAnimationFrame(() => {
             try {
                 if (!this.diagramRenderer) this.renderRelationshipDiagram();
@@ -3684,9 +3736,9 @@ class App {
         URL.revokeObjectURL(url);
     }
 
-    // ──────────────────────────────────────────────
-    // BYGG DASHBOARD — File System Access write
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // BYGG DASHBOARD â€” File System Access write
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async buildDashboard(btn = null) {
         if (!this.parsedModel) {
@@ -3696,7 +3748,7 @@ class App {
 
         const originalHTML = btn ? btn.innerHTML : null;
         if (btn) {
-            btn.innerHTML = '<span class="material-symbols-outlined btn-download-icon">hourglass_top</span><span class="btn-download-label">Generating…</span>';
+            btn.innerHTML = '<span class="material-symbols-outlined btn-download-icon">hourglass_top</span><span class="btn-download-label">Generatingâ€¦</span>';
             btn.disabled = true;
         }
 
@@ -3738,7 +3790,7 @@ class App {
             // Cache the dir handle so scaffoldRayfin() can reuse it without reprompting
             this._dashboardDirHandle = dirHandle;
 
-            this.showToast('✓ dashboard.html + model-ctx.md skrevet til ' + dirHandle.name, 'success');
+            this.showToast('âœ“ dashboard.html + model-ctx.md skrevet til ' + dirHandle.name, 'success');
 
         } catch (err) {
             this.showToast('Dashboard-bygging feilet: ' + err.message, 'error');
@@ -3751,9 +3803,9 @@ class App {
         }
     }
 
-    // ──────────────────────────────────────────────
-    // SCAFFOLD RAYFIN — Fabric Data App seed
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // SCAFFOLD RAYFIN â€” Fabric Data App seed
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async scaffoldRayfin(btn = null) {
         if (!this.parsedModel) {
@@ -3763,7 +3815,7 @@ class App {
 
         const originalHTML = btn ? btn.innerHTML : null;
         if (btn) {
-            btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px">hourglass_top</span> Scaffolding…';
+            btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px">hourglass_top</span> Scaffoldingâ€¦';
             btn.disabled = true;
         }
 
@@ -3784,7 +3836,7 @@ class App {
                 this.parsedModel, this.visualData, this.lineageEngine
             );
 
-            // Write all files — create visuals/ sub-directory on first use
+            // Write all files â€” create visuals/ sub-directory on first use
             let visualsDir = null;
             for (const [relPath, content] of Object.entries(files)) {
                 if (relPath.startsWith('visuals/')) {
@@ -3806,7 +3858,7 @@ class App {
 
             const fileCount = Object.keys(files).length;
             this.showToast(
-                `✓ Rayfin-prosjekt satt opp (${fileCount} filer) i ${dirHandle.name} — kjør: bun install && bun run dev`,
+                `âœ“ Rayfin-prosjekt satt opp (${fileCount} filer) i ${dirHandle.name} â€” kjÃ¸r: bun install && bun run dev`,
                 'success'
             );
 
@@ -3821,9 +3873,9 @@ class App {
         }
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // DIAGRAM EXPORT
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     _handleDiagramExport(format, diagramType) {
         const modelName = this.parsedModel?.database?.name || 'model';
@@ -4032,7 +4084,7 @@ svg{max-width:100%;height:auto}
 
         const filename = `${modelName}-${diagramType}.drawio`;
         this._downloadFile(xml, filename, 'application/xml');
-        this.showToast(`Downloaded ${filename} — open in draw.io to edit`);
+        this.showToast(`Downloaded ${filename} â€” open in draw.io to edit`);
         this._track('Diagram Export', { format: 'drawio', diagram: diagramType });
     }
 
@@ -4056,7 +4108,7 @@ svg{max-width:100%;height:auto}
 
         // Copy to clipboard
         navigator.clipboard.writeText(mermaidText).then(() => {
-            this.showToast('Mermaid diagram copied to clipboard — paste in mermaid.live or any Mermaid-compatible tool');
+            this.showToast('Mermaid diagram copied to clipboard â€” paste in mermaid.live or any Mermaid-compatible tool');
         }).catch(() => {
             // Fallback: download as .mmd file
             this._downloadFile(mermaidText, `${modelName}-${diagramType}.mmd`, 'text/plain');
@@ -4106,9 +4158,9 @@ svg{max-width:100%;height:auto}
         svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // UTILITIES
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     _bindDaxToggles(container) {
         const root = container || document;
@@ -4179,9 +4231,9 @@ svg{max-width:100%;height:auto}
         }, 5000);
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // FIELD USAGE VIEW
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     _countUnusedColumns() {
         if (!this.parsedModel) return 0;
@@ -4336,7 +4388,7 @@ svg{max-width:100%;height:auto}
 
         const isColUnused = u => !u.visual && !u.dax && !u.rel && !u.sort && !u.key && !u.hierarchy && !u.rls;
 
-        // ── Column summary stats ──
+        // â”€â”€ Column summary stats â”€â”€
         let total = 0, unused = 0, visualOnly = 0, daxOnly = 0, relOnly = 0, multi = 0;
         for (const t of this.parsedModel.tables) {
             if (t._isAutoDate) continue;
@@ -4352,7 +4404,7 @@ svg{max-width:100%;height:auto}
             }
         }
 
-        // ── Measure summary stats ──
+        // â”€â”€ Measure summary stats â”€â”€
         let mTotal = 0, mUnused = 0;
         for (const t of this.parsedModel.tables) {
             if (t._isAutoDate) continue;
@@ -4378,7 +4430,7 @@ svg{max-width:100%;height:auto}
         const render = (filter) => {
             let html = '';
 
-            // ── Measures section ──
+            // â”€â”€ Measures section â”€â”€
             if (filter === 'all' || filter === 'unused' || filter === 'measures') {
                 let mRows = '';
                 for (const t of this.parsedModel.tables) {
@@ -4391,12 +4443,12 @@ svg{max-width:100%;height:auto}
 
                         let tags = '';
                         if (mUnusedFlag) {
-                            tags = `<span class="fu-tag fu-tag-unused">⚠ unused</span>`;
+                            tags = `<span class="fu-tag fu-tag-unused">âš  unused</span>`;
                         } else if (mu.visual) {
-                            tags = `<span class="fu-tag fu-tag-visual">📊 ${mu.visualCount} visual(s)</span>`;
+                            tags = `<span class="fu-tag fu-tag-visual">ðŸ“Š ${mu.visualCount} visual(s)</span>`;
                             if (mu.pages?.length) tags += `<span class="fu-tag fu-tag-sort" style="background:#e8eaf6;color:#283593">${mu.pages.join(', ')}</span>`;
                         }
-                        // usedByMeasure-only: no tag — it's used, just not directly in a visual
+                        // usedByMeasure-only: no tag â€” it's used, just not directly in a visual
                         if (m.isHidden) tags += `<span class="fu-tag fu-tag-hidden">hidden</span>`;
                         mRows += `<div class="fu-col-row${mUnusedFlag ? ' unused' : ''}">
                             <span class="fu-col-name" title="${esc(m.name)}">[${esc(m.name)}]</span>
@@ -4412,14 +4464,14 @@ svg{max-width:100%;height:auto}
                             <span>Measures</span>
                             ${mUnused > 0 ? `<span style="margin-left:8px;background:#ffebee;color:#c62828;padding:1px 7px;border-radius:10px;font-size:11px">${mUnused} unused</span>` : ''}
                             <span style="color:var(--text-secondary);font-size:11px;font-weight:400">${mTotal} total</span>
-                            <span class="fu-table-toggle">▶</span>
+                            <span class="fu-table-toggle">â–¶</span>
                         </div>
                         <div class="fu-table-body" id="fu-table-__measures__">${mRows}</div>
                     </div>`;
                 }
             }
 
-            // ── Columns section (skip for measures-only filter) ──
+            // â”€â”€ Columns section (skip for measures-only filter) â”€â”€
             if (filter !== 'measures') {
                 for (const t of this.parsedModel.tables) {
                     if (t._isAutoDate) continue;
@@ -4434,21 +4486,21 @@ svg{max-width:100%;height:auto}
 
                         let tags = '';
                         if (unused) {
-                            tags = `<span class="fu-tag fu-tag-unused">⚠ unused</span>`;
+                            tags = `<span class="fu-tag fu-tag-unused">âš  unused</span>`;
                         } else {
-                            if (u.visual)    tags += `<span class="fu-tag fu-tag-visual">📊 visuals (${u.visualCount})</span>`;
-                            if (u.dax)       tags += `<span class="fu-tag fu-tag-dax" title="${esc(u.daxMeasures.join(', '))}">🧮 DAX (${u.daxMeasures.length})</span>`;
-                            if (u.rel)       tags += `<span class="fu-tag fu-tag-rel">🔗 relationship</span>`;
-                            if (u.sort)      tags += `<span class="fu-tag fu-tag-sort">⇅ sort key</span>`;
-                            if (u.key)       tags += `<span class="fu-tag fu-tag-rel" style="background:#e8f5e9;color:#2e7d32">🔑 key</span>`;
-                            if (u.hierarchy) tags += `<span class="fu-tag fu-tag-sort" style="background:#e8eaf6;color:#283593">📂 hierarchy</span>`;
-                            if (u.rls)       tags += `<span class="fu-tag fu-tag-rel" style="background:#fce4ec;color:#880e4f">🛡 RLS</span>`;
+                            if (u.visual)    tags += `<span class="fu-tag fu-tag-visual">ðŸ“Š visuals (${u.visualCount})</span>`;
+                            if (u.dax)       tags += `<span class="fu-tag fu-tag-dax" title="${esc(u.daxMeasures.join(', '))}">ðŸ§® DAX (${u.daxMeasures.length})</span>`;
+                            if (u.rel)       tags += `<span class="fu-tag fu-tag-rel">ðŸ”— relationship</span>`;
+                            if (u.sort)      tags += `<span class="fu-tag fu-tag-sort">â‡… sort key</span>`;
+                            if (u.key)       tags += `<span class="fu-tag fu-tag-rel" style="background:#e8f5e9;color:#2e7d32">ðŸ”' key</span>`;
+                            if (u.hierarchy) tags += `<span class="fu-tag fu-tag-sort" style="background:#e8eaf6;color:#283593">ðŸ“‚ hierarchy</span>`;
+                            if (u.rls)       tags += `<span class="fu-tag fu-tag-rel" style="background:#fce4ec;color:#880e4f">ðŸ›¡ RLS</span>`;
                         }
                         if (c.isHidden) tags += `<span class="fu-tag fu-tag-hidden">hidden</span>`;
 
                         return `<div class="fu-col-row${unused ? ' unused' : ''}">
                             <span class="fu-col-name" title="${esc(c.name)}">${esc(c.name)}</span>
-                            <span class="fu-col-type">${esc(c.dataType || '—')}</span>
+                            <span class="fu-col-type">${esc(c.dataType || 'â€”')}</span>
                             <span class="fu-col-tags">${tags}</span>
                         </div>`;
                     }).filter(Boolean);
@@ -4465,7 +4517,7 @@ svg{max-width:100%;height:auto}
                             <span class="material-symbols-outlined" style="font-size:16px;color:var(--primary)">table_chart</span>
                             <span>${esc(t.name)}</span>${badge}
                             <span style="color:var(--text-secondary);font-size:11px;font-weight:400">${t.columns.length} columns</span>
-                            <span class="fu-table-toggle">▶</span>
+                            <span class="fu-table-toggle">â–¶</span>
                         </div>
                         <div class="fu-table-body" id="${blockId}">${rows.join('')}</div>
                     </div>`;
@@ -4481,7 +4533,7 @@ svg{max-width:100%;height:auto}
                     const toggle = hdr.querySelector('.fu-table-toggle');
                     if (!body) return;
                     const open = body.classList.toggle('open');
-                    if (toggle) toggle.textContent = open ? '▼' : '▶';
+                    if (toggle) toggle.textContent = open ? 'â–¼' : 'â–¶';
                 });
             });
         };
@@ -4500,9 +4552,9 @@ svg{max-width:100%;height:auto}
         }
     }
 
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // BEST PRACTICE ANALYZER (BPA) METHODS
-    // ──────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     renderBPA() {
         if (!this.bpaResults) {
@@ -4511,62 +4563,42 @@ svg{max-width:100%;height:auto}
 
         const results = this.bpaResults;
 
-        // Score circle & text
-        const scoreNumEl = document.getElementById('bpaScoreNumber');
-        const scoreRingEl = document.getElementById('bpaScoreRing');
-        if (scoreNumEl) scoreNumEl.textContent = results.score;
-        if (scoreRingEl) {
-            const circumference = 339.292;
-            const offset = circumference * (1 - (results.score / 100));
-            scoreRingEl.style.strokeDashoffset = offset;
-            
-            // Set ring color based on compliance
-            if (results.score >= 90) {
-                scoreRingEl.style.stroke = '#86BC25'; // Deloitte Green
-            } else if (results.score >= 70) {
-                scoreRingEl.style.stroke = '#ffb81c'; // Amber
-            } else {
-                scoreRingEl.style.stroke = '#da291c'; // Red
+        // Score rings (circumference for r=34: 2*PI*34 = 213.628)
+        const circumference = 213.628;
+        const ringColor = s => s >= 90 ? '#86BC25' : s >= 70 ? '#ffb81c' : '#da291c';
+
+        const updateRing = (numId, ringId, score) => {
+            const numEl  = document.getElementById(numId);
+            const ringEl = document.getElementById(ringId);
+            if (numEl)  numEl.textContent = score;
+            if (ringEl) {
+                ringEl.style.strokeDashoffset = circumference * (1 - score / 100);
+                ringEl.style.stroke = ringColor(score);
             }
-        }
+        };
 
-        // Stats boxes
-        const criticalEl = document.getElementById('bpaCountCritical');
-        const warningEl = document.getElementById('bpaCountWarning');
-        const infoEl = document.getElementById('bpaCountInfo');
-        if (criticalEl) criticalEl.textContent = results.stats.critical;
-        if (warningEl) warningEl.textContent = results.stats.warning;
-        if (infoEl) infoEl.textContent = results.stats.info;
+        updateRing('bpaScoreNumber',   'bpaScoreRing',   results.scoreSemanticModel);
+        updateRing('bpaScoreNumberAI', 'bpaScoreRingAI', results.scoreAIReadiness);
 
-        // Update filters with actual counts
-        const allBtn = document.querySelector('.btn-filter-bpa[data-severity="all"]');
-        const critBtn = document.querySelector('.btn-filter-bpa[data-severity="critical"]');
-        const warnBtn = document.querySelector('.btn-filter-bpa[data-severity="warning"]');
-        const infoBtn = document.querySelector('.btn-filter-bpa[data-severity="info"]');
+        // Per-panel stats
+        const smFindings = results.findings.filter(f => f.category !== 'AI Readiness');
+        const aiFindings = results.findings.filter(f => f.category === 'AI Readiness');
+        const countBySev = (arr, sev) => arr.filter(f => f.severity === sev).length;
+        const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
 
-        if (allBtn) allBtn.innerHTML = `All (${results.findings.length})`;
-        if (critBtn) critBtn.innerHTML = `Critical (${results.stats.critical})`;
-        if (warnBtn) warnBtn.innerHTML = `Warning (${results.stats.warning})`;
-        if (infoBtn) infoBtn.innerHTML = `Info (${results.stats.info})`;
+        setEl('bpaSmCritical', countBySev(smFindings, 3));
+        setEl('bpaSmWarning',  countBySev(smFindings, 2));
+        setEl('bpaSmInfo',     countBySev(smFindings, 1));
+        setEl('bpaAiWarning',  countBySev(aiFindings, 2));
+        setEl('bpaAiInfo',     countBySev(aiFindings, 1));
 
-        // Reset filter button active state
-        document.querySelectorAll('.btn-filter-bpa').forEach(btn => {
-            if (btn.dataset.severity === 'all') {
-                btn.classList.add('active');
-                btn.style.background = 'var(--primary)';
-                btn.style.color = '#fff';
-            } else {
-                btn.classList.remove('active');
-                btn.style.background = '';
-                btn.style.color = '';
-            }
-        });
-
-        this.filterBPAFindings('all');
+        this.filterBPAPanel('sm', 'all');
+        this.filterBPAPanel('ai', 'all');
     }
 
-    filterBPAFindings(severity) {
-        const container = document.getElementById('bpaFindingsContainer');
+    filterBPAPanel(panel, severity) {
+        const isAI = panel === 'ai';
+        const container = document.getElementById(isAI ? 'bpaFindingsAI' : 'bpaFindingsSM');
         if (!container) return;
 
         if (!this.bpaResults || !this.bpaResults.findings) {
@@ -4574,8 +4606,9 @@ svg{max-width:100%;height:auto}
             return;
         }
 
-        const findings = this.bpaResults.findings;
-        const filtered = findings.filter(f => {
+        const findings = this.bpaResults.findings.filter(f => {
+            const inPanel = isAI ? f.category === 'AI Readiness' : f.category !== 'AI Readiness';
+            if (!inPanel) return false;
             if (severity === 'all') return true;
             if (severity === 'critical') return f.severity === 3;
             if (severity === 'warning') return f.severity === 2;
@@ -4583,60 +4616,86 @@ svg{max-width:100%;height:auto}
             return true;
         });
 
-        if (filtered.length === 0) {
-            container.innerHTML = '<p class="placeholder" style="padding:40px; text-align:center; color:var(--text-light)">No rule violations found with this severity criteria.</p>';
+        if (findings.length === 0) {
+            container.innerHTML = '<p class="placeholder" style="padding:32px;text-align:center;color:var(--text-light)">No violations found for this filter.</p>';
             return;
         }
 
-        // Sort: Critical (3) down to Info (1)
-        filtered.sort((a, b) => b.severity - a.severity);
+        // Group: category → rule → findings[]
+        const sevOrder = { 3: 0, 2: 1, 1: 2 };
+        const categoryMap = new Map();
+        findings.forEach(f => {
+            if (!categoryMap.has(f.category)) categoryMap.set(f.category, new Map());
+            const ruleMap = categoryMap.get(f.category);
+            if (!ruleMap.has(f.id)) ruleMap.set(f.id, { name: f.name, id: f.id, severity: f.severity, findings: [] });
+            ruleMap.get(f.id).findings.push(f);
+        });
+
+        const sortedCategories = [...categoryMap.entries()].sort((a, b) => {
+            const worstA = Math.min(...[...a[1].values()].map(r => sevOrder[r.severity]));
+            const worstB = Math.min(...[...b[1].values()].map(r => sevOrder[r.severity]));
+            return worstA - worstB;
+        });
+
+        const sevText  = s => s === 3 ? 'Critical' : s === 2 ? 'Warning' : 'Info';
+        const sevClass = s => s === 3 ? 'sev-3' : s === 2 ? 'sev-2' : 'sev-1';
+        const sevColor = s => s === 3 ? '#da291c' : s === 2 ? '#e67e22' : '#3498db';
 
         let html = '';
-        filtered.forEach(f => {
-            const sevText = f.severity === 3 ? 'Critical' : f.severity === 2 ? 'Warning' : 'Info';
-            const sevClass = f.severity === 3 ? 'sev-3' : f.severity === 2 ? 'sev-2' : 'sev-1';
-            
+        sortedCategories.forEach(([category, ruleMap]) => {
+            const catTotal = [...ruleMap.values()].reduce((n, r) => n + r.findings.length, 0);
+            const catWorst = [...ruleMap.values()].reduce((w, r) => r.severity > w ? r.severity : w, 1);
+
             html += `
-            <div class="bpa-finding-group ${sevClass}" data-rule-id="${this._esc(f.id)}">
-                <div class="bpa-finding-header">
-                    <span class="bpa-severity-badge ${sevClass}">${this._esc(sevText)}</span>
-                    <h4>${this._esc(f.name)}</h4>
-                    <span style="font-size:11px; color:var(--text-light); margin-left:auto; display:flex; align-items:center; gap:4px">
-                        <span class="material-symbols-outlined" style="font-size:14px">menu_book</span> Learn more
-                    </span>
+            <div class="bpa-tree-category collapsed">
+                <div class="bpa-tree-cat-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                    <span class="bpa-tree-chevron material-symbols-outlined">expand_more</span>
+                    <span class="bpa-severity-dot" style="background:${sevColor(catWorst)}"></span>
+                    <span class="bpa-tree-cat-name">${this._esc(category)}</span>
+                    <span class="bpa-tree-count">${catTotal}</span>
                 </div>
-                <div class="bpa-finding-body">
-                    ${this._esc(f.message)}
-                </div>
-                <div class="bpa-finding-context">
-                    <div class="bpa-finding-context-item">
-                        <span class="material-symbols-outlined" style="font-size:12px">category</span>
-                        <span>${this._esc(f.category)}</span>
+                <div class="bpa-tree-cat-body">`;
+
+            const sortedRules = [...ruleMap.values()].sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity]);
+            sortedRules.forEach(rule => {
+                html += `
+                <div class="bpa-tree-rule collapsed">
+                    <div class="bpa-tree-rule-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                        <span class="bpa-tree-chevron material-symbols-outlined">expand_more</span>
+                        <span class="bpa-severity-badge ${sevClass(rule.severity)}">${sevText(rule.severity)}</span>
+                        <span class="bpa-tree-rule-name">${this._esc(rule.name)}</span>
+                        <span class="bpa-tree-count">${rule.findings.length}</span>
+                        <span class="bpa-tree-learn bpa-finding-group" data-rule-id="${this._esc(rule.id)}" title="Learn more">
+                            <span class="material-symbols-outlined" style="font-size:14px">menu_book</span>
+                        </span>
                     </div>
-                    ${f.table && f.table !== 'Global' ? `
-                    <div class="bpa-finding-context-item filter-chip-nav" style="cursor:pointer; color:var(--accent)" data-table="${this._esc(f.table)}" data-object="${this._esc(f.object)}" title="Navigate to object">
-                        <span class="material-symbols-outlined" style="font-size:12px">table_chart</span>
-                        <span>${this._esc(f.table)} ${f.object && f.object !== f.table ? ` → ${this._esc(f.object)}` : ''}</span>
-                    </div>
-                    ` : `
-                    <div class="bpa-finding-context-item">
-                        <span class="material-symbols-outlined" style="font-size:12px">settings_suggest</span>
-                        <span>Global Model</span>
-                    </div>
-                    `}
-                </div>
-            </div>`;
+                    <div class="bpa-tree-rule-body">`;
+
+                rule.findings.forEach(f => {
+                    const isGlobal = !f.table || f.table === 'Global';
+                    const label = isGlobal
+                        ? 'Global Model'
+                        : (f.object && f.object !== f.table ? `${f.table} → ${f.object}` : f.table);
+                    const navAttr = !isGlobal ? `data-table="${this._esc(f.table)}" data-object="${this._esc(f.object)}"` : '';
+                    html += `
+                    <div class="bpa-tree-finding filter-chip-nav" ${navAttr} title="${this._esc(f.message)}">
+                        <span class="material-symbols-outlined" style="font-size:11px;color:var(--text-light)">${isGlobal ? 'settings_suggest' : 'subdirectory_arrow_right'}</span>
+                        <span class="bpa-tree-finding-label">${this._esc(label)}</span>
+                    </div>`;
+                });
+
+                html += `</div></div>`;
+            });
+
+            html += `</div></div>`;
         });
 
         container.innerHTML = html;
 
-        // Bind clicks for the navigation links specifically
         container.querySelectorAll('.filter-chip-nav').forEach(chip => {
             chip.addEventListener('click', (e) => {
-                e.stopPropagation(); // Avoid triggering the parent card click which opens the learn modal
-                const tbl = chip.dataset.table;
-                const obj = chip.dataset.object;
-                this.navigateFromFinding(tbl, obj);
+                e.stopPropagation();
+                this.navigateFromFinding(chip.dataset.table, chip.dataset.object);
             });
         });
     }
@@ -4781,7 +4840,7 @@ CustomerName, [Total Sales], ProductID</code></pre>`;
         while ((match = fnPattern.exec(expr)) !== null) {
             result += this._esc(expr.slice(lastIndex, match.index));
             const fn = match[1];
-            result += `<span class="dax-fn" data-fn="${fn.toLowerCase()}" title="${fn} — click for docs">${this._esc(fn)}</span>`;
+            result += `<span class="dax-fn" data-fn="${fn.toLowerCase()}" title="${fn} â€” click for docs">${this._esc(fn)}</span>`;
             lastIndex = match.index + fn.length;
         }
         result += this._esc(expr.slice(lastIndex));
@@ -4955,3 +5014,4 @@ CustomerName, [Total Sales], ProductID</code></pre>`;
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
+

@@ -1,7 +1,0 @@
-role CountryManager
-	modelPermission: read
-
-	tablePermission financials = financials[Country] IN SELECTCOLUMNS(FILTER('_SecurityTable', '_SecurityTable'[UserEmail] = USERPRINCIPALNAME()), "Country", '_SecurityTable'[Country])
-
-	annotation PBI_Id = 2e81d86f200f4fc2a74611a5704c120c
-
