@@ -133,6 +133,77 @@ body {
     min-height: calc(100vh - 180px);
 }
 
+/* ── NAV GROUPS ── */
+.nav-group {
+    border-bottom: 1px solid var(--border);
+}
+
+.nav-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px 9px 12px;
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    background: var(--surface);
+    border: none;
+    width: 100%;
+    text-align: left;
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+}
+
+.nav-group-header:hover {
+    background: var(--bg);
+    color: var(--text);
+}
+
+.nav-group.has-active > .nav-group-header {
+    color: var(--primary);
+}
+
+.nav-group-icon {
+    font-size: 15px;
+    flex-shrink: 0;
+}
+
+.nav-group-label {
+    flex: 1;
+}
+
+.nav-group-chevron {
+    font-size: 16px;
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+}
+
+.nav-group.collapsed > .nav-group-header > .nav-group-chevron {
+    transform: rotate(-90deg);
+}
+
+.nav-group-body {
+    overflow: hidden;
+    max-height: 2000px;
+    transition: max-height 0.25s ease;
+}
+
+.nav-group.collapsed > .nav-group-body {
+    max-height: 0;
+}
+
+.nav-group-body .sidebar-section {
+    border-bottom: none;
+    border-top: 1px solid var(--border-light, rgba(0,0,0,0.06));
+}
+
+.nav-group-body .sidebar-header {
+    padding-left: 20px;
+}
+
 /* ── SIDEBAR ── */
 .sidebar {
     width: 240px;
@@ -428,21 +499,170 @@ body {
     cursor: default;
 }
 
-.folder-info {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: #e8f5e9;
-    border: 1px solid #a5d6a7;
+/* ── WORKSPACE NAVIGATOR HEADER ── */
+.ws-nav-header {
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
     margin-bottom: 16px;
-    font-size: 14px;
+    overflow: hidden;
 }
 
-.folder-info .material-symbols-outlined {
-    color: #2e7d32;
+.ws-nav-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-light, rgba(0,0,0,0.06));
 }
+
+.ws-nav-folder-icon {
+    font-size: 18px;
+    color: #2e7d32;
+    flex-shrink: 0;
+}
+
+.ws-nav-folder-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.ws-nav-agg {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 4px;
+    flex: 1;
+    flex-wrap: wrap;
+}
+
+.ws-nav-agg-item {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.ws-nav-agg-item strong {
+    color: var(--text);
+    font-weight: 700;
+}
+
+.ws-nav-agg-sep {
+    font-size: 11px;
+    color: var(--border);
+}
+
+.ws-nav-change-btn {
+    background: none;
+    border: none;
+    color: var(--primary);
+    cursor: pointer;
+    font-size: 12px;
+    text-decoration: underline;
+    flex-shrink: 0;
+    padding: 0;
+}
+
+/* Workspace cards row */
+.ws-nav-cards {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+}
+.ws-nav-cards::-webkit-scrollbar { display: none; }
+
+.ws-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 8px 28px 8px 10px;
+    min-width: 150px;
+    max-width: 220px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    flex-shrink: 0;
+    position: relative;
+    text-align: left;
+}
+
+.ws-card.active {
+    border-color: var(--primary);
+    background: var(--card-bg, #fff);
+    box-shadow: 0 1px 5px rgba(0,0,0,0.08);
+}
+
+.ws-card:hover:not(.active) {
+    border-color: var(--primary);
+    background: var(--bg-hover, rgba(0,0,0,0.03));
+}
+
+.ws-card-workspace {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--text-secondary);
+}
+
+.ws-card-model {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws-card-stats {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+    white-space: nowrap;
+}
+
+.ws-card-close {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--text-secondary);
+    opacity: 0;
+    transition: opacity 0.1s, color 0.1s;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    padding: 0;
+}
+
+.ws-card:hover .ws-card-close { opacity: 0.6; }
+.ws-card-close:hover { opacity: 1 !important; color: #e53935; background: rgba(229,57,53,0.1); }
+
+.ws-card-add {
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    max-width: 40px;
+    padding: 8px;
+    border: 1px dashed var(--border);
+    color: var(--text-secondary);
+}
+.ws-card-add:hover { border-color: var(--primary); color: var(--primary); background: transparent; }
+
+[data-theme="dark"] .ws-card.active { background: #1e2431; }
+[data-theme="dark"] .ws-card-close:hover { background: rgba(229,57,53,0.2); }
 
 /* ── DISCOVERY PANEL ── */
 .discovery-panel {
@@ -532,43 +752,74 @@ body {
 /* ── STATS BAR ── */
 .stats-bar {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
     margin-bottom: 20px;
 }
 
 .stat-card {
+    --stat-accent: var(--primary);
     background: var(--card-bg);
-    border: 2px solid var(--border);
-    border-top: 4px solid var(--primary);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--stat-accent);
     border-radius: var(--radius);
-    padding: 16px;
-    text-align: center;
+    padding: 14px 16px 14px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    transition: box-shadow 0.15s, transform 0.15s;
+}
+
+.stat-card:hover {
+    box-shadow: 0 3px 10px rgba(0,0,0,0.09);
+    transform: translateY(-1px);
+}
+
+.stat-icon {
+    font-size: 22px;
+    color: var(--stat-accent);
+    flex-shrink: 0;
+    opacity: 0.85;
 }
 
 .stat-card .stat-value {
-    font-size: 28px;
-    font-weight: 700;
-    color: var(--primary);
+    font-size: 26px;
+    font-weight: 800;
+    color: var(--text);
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    line-height: 1;
 }
 
 .stat-card .stat-label {
-    font-size: 12px;
+    font-size: 10px;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.7px;
+    margin-top: 2px;
+}
+
+.stat-card-text {
+    display: flex;
+    flex-direction: column;
 }
 
 .stat-hint {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-light);
-    margin-top: 4px;
-    min-height: 14px;
+    margin-top: 2px;
+    min-height: 12px;
 }
 
 .stat-card.dimmed {
     opacity: 0.5;
+}
+
+[data-theme="dark"] .stat-card {
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}
+[data-theme="dark"] .stat-card:hover {
+    box-shadow: 0 3px 10px rgba(0,0,0,0.3);
 }
 
 /* ── TABLES ── */
@@ -4397,6 +4648,332 @@ tr:hover {
     font-size: 10px;
     font-weight: 500;
     margin-left: 2px;
+}
+
+/* ── AI Agent Export — Readiness panel (air-*) ───────────────────────────── */
+.air-panel {
+    display: flex;
+    gap: 24px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+.air-score-wrap {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-shrink: 0;
+}
+.air-score-ring {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    border: 5px solid var(--score-color, #2e7d32);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.air-score-num {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text);
+}
+.air-score-label {
+    font-size: 10px;
+    color: var(--text-secondary);
+}
+.air-score-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+}
+.air-score-sub {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 3px;
+}
+.air-metrics {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 200px;
+}
+.air-metric {}
+.air-metric-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.air-bar-track {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 3px;
+}
+.air-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+.air-metric-count {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+.air-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+.air-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: rgba(0,163,224,0.08);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+}
+.air-chip .material-symbols-outlined { font-size: 13px; }
+
+/* ── AI Agent Export — Export cards (aie-*) ──────────────────────────────── */
+.aie-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+}
+.aie-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.aie-card-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.aie-badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.aie-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.2;
+}
+.aie-format {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+.aie-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    flex: 1;
+}
+.aie-desc code {
+    background: var(--surface);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'Cascadia Code', 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+}
+.aie-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    align-self: flex-start;
+}
+.aie-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--primary);
+    color: var(--primary);
+}
+.aie-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.aie-btn-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+.aie-btn-primary:hover {
+    background: var(--primary-dark, #005a9e);
+    border-color: var(--primary-dark, #005a9e);
+    color: #fff;
+}
+.aie-btn .material-symbols-outlined { font-size: 15px; }
+
+/* ── AI Agent Export — Integration guide ─────────────────────────────────── */
+.aie-guide {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+.aie-guide-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+.aie-guide-summary::-webkit-details-marker { display: none; }
+.aie-guide-summary .material-symbols-outlined { font-size: 18px; color: var(--primary); }
+.aie-guide-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0 20px 20px;
+}
+.aie-step {
+    display: flex;
+    gap: 14px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+.aie-step strong { color: var(--text); }
+.aie-step code {
+    background: var(--surface);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'Cascadia Code', 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+}
+.aie-step-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+/* ── AI Agent Export — Diagram sections ─────────────────────────────────── */
+.aie-diagram-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px 20px;
+    margin-bottom: 0;
+}
+.aie-section-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 14px;
+}
+.aie-section-label .material-symbols-outlined { font-size: 16px; color: var(--primary); }
+.aie-schema-wrap { overflow-x: auto; }
+.aie-schema-svg {
+    width: 100%;
+    max-width: 730px;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+}
+.aie-flow-wrap {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+.aie-flow-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 84px;
+    flex: 1;
+}
+.aie-flow-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    flex-shrink: 0;
+}
+.aie-flow-icon .material-symbols-outlined { font-size: 24px; }
+.aie-flow-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+    line-height: 1.3;
+}
+.aie-flow-sub {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-align: center;
+    line-height: 1.4;
+}
+.aie-flow-arrow {
+    font-size: 24px;
+    color: var(--text-secondary);
+    padding-top: 12px;
+    flex-shrink: 0;
+    opacity: 0.5;
 }
 
 /* ── Sidebar workspace list ──────────────────────────────────────────────── */

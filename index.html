@@ -36,8 +36,8 @@
     <header class="app-header">
         <div class="header-left">
             <img src="src/Power-BI.png" alt="Power BI" class="header-logo">
-            <span class="header-title">Internal PBIP Documenter</span>
-            <span class="header-subtitle">Power BI Semantic Lineage & Visual Documentation</span>
+            <span class="header-title">Organizational Power BI Catalog</span>
+            <span class="header-subtitle">Semantic Lineage & Visual Documentation</span>
         </div>
         <div class="header-right">
             <span id="githubStars" class="github-stars hidden">
@@ -105,43 +105,61 @@
             </div>
         </div>
 
-        <!-- Folder Info (shown after selection) -->
-        <div id="folderInfo" class="folder-info hidden">
-            <span class="material-symbols-outlined">folder</span>
-            <span id="folderName">-</span>
-            <span style="margin-left:auto">
-                <button id="changeFolderBtn" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:13px;text-decoration:underline;">
-                    Change folder
-                </button>
-            </span>
+        <!-- Workspace Navigator (shown after selection) -->
+        <div id="folderInfo" class="ws-nav-header hidden">
+            <div class="ws-nav-top">
+                <span class="material-symbols-outlined ws-nav-folder-icon">folder_open</span>
+                <span id="folderName" class="ws-nav-folder-name">-</span>
+                <div class="ws-nav-agg" id="wsNavAgg"></div>
+                <button id="changeFolderBtn" class="ws-nav-change-btn">Change folder</button>
+            </div>
+            <div id="workspaceTabBar" class="ws-nav-cards hidden"></div>
         </div>
 
         <!-- Stats Bar (shown after parsing) -->
         <div id="statsBar" class="stats-bar hidden">
-            <div class="stat-card">
-                <div class="stat-value" id="statTables">0</div>
-                <div class="stat-label">Tables</div>
+            <div class="stat-card" style="--stat-accent:#1a3a5c">
+                <span class="material-symbols-outlined stat-icon">table_chart</span>
+                <div class="stat-card-text">
+                    <div class="stat-value" id="statTables">0</div>
+                    <div class="stat-label">Tables</div>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value" id="statColumns">0</div>
-                <div class="stat-label">Columns</div>
+            <div class="stat-card" style="--stat-accent:#0077b6">
+                <span class="material-symbols-outlined stat-icon">view_column</span>
+                <div class="stat-card-text">
+                    <div class="stat-value" id="statColumns">0</div>
+                    <div class="stat-label">Columns</div>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value" id="statMeasures">0</div>
-                <div class="stat-label">Measures</div>
+            <div class="stat-card" style="--stat-accent:#2e7d32">
+                <span class="material-symbols-outlined stat-icon">functions</span>
+                <div class="stat-card-text">
+                    <div class="stat-value" id="statMeasures">0</div>
+                    <div class="stat-label">Measures</div>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value" id="statRelationships">0</div>
-                <div class="stat-label">Relationships</div>
+            <div class="stat-card" style="--stat-accent:#6a1b9a">
+                <span class="material-symbols-outlined stat-icon">device_hub</span>
+                <div class="stat-card-text">
+                    <div class="stat-value" id="statRelationships">0</div>
+                    <div class="stat-label">Relationships</div>
+                </div>
             </div>
-            <div class="stat-card" id="statVisualsCard">
-                <div class="stat-value" id="statVisuals" aria-describedby="statVisualsHint">0</div>
-                <div class="stat-label">Visuals</div>
-                <div class="stat-hint" id="statVisualsHint"></div>
+            <div class="stat-card" id="statVisualsCard" style="--stat-accent:#e67e22">
+                <span class="material-symbols-outlined stat-icon">visibility</span>
+                <div class="stat-card-text">
+                    <div class="stat-value" id="statVisuals" aria-describedby="statVisualsHint">0</div>
+                    <div class="stat-label">Visuals</div>
+                    <div class="stat-hint" id="statVisualsHint"></div>
+                </div>
             </div>
-            <div class="stat-card" id="statDataSourcesCard">
-                <div class="stat-value" id="statDataSources">0</div>
-                <div class="stat-label">Data Sources</div>
+            <div class="stat-card" id="statDataSourcesCard" style="--stat-accent:#00838f">
+                <span class="material-symbols-outlined stat-icon">storage</span>
+                <div class="stat-card-text">
+                    <div class="stat-value" id="statDataSources">0</div>
+                    <div class="stat-label">Data Sources</div>
+                </div>
             </div>
         </div>
 
@@ -210,9 +228,6 @@
             <button type="button" id="warningBannerClose" class="warning-banner-close" title="Dismiss">&times;</button>
         </div>
 
-        <!-- Workspace Tab Bar -->
-        <div id="workspaceTabBar" class="ws-tab-bar hidden"></div>
-
         <!-- Main App Body (sidebar + content) -->
         <div id="appBody" class="app-body hidden">
             <div id="sidebarOverlay" class="sidebar-overlay"></div>
@@ -235,120 +250,165 @@
                     </div>
                     <div class="sidebar-search-count hidden" id="sidebarSearchCount"></div>
                 </div>
+                <!-- Standalone: Model Overview -->
                 <div class="sidebar-section">
                     <div class="sidebar-header" data-section="overview" tabindex="0" role="button">
                         <span class="material-symbols-outlined">dashboard</span>
                         Model Overview
                     </div>
                 </div>
-                <div class="sidebar-section">
-                    <div class="sidebar-header" data-section="bpa" tabindex="0" role="button" style="border-left: 3px solid var(--accent)">
-                        <span class="material-symbols-outlined" style="color:var(--accent)">fact_check</span>
-                        Best Practices (BPA)
-                        <span class="sidebar-badge bpa-badge hidden" id="sidebarBpaBadge" style="background:var(--accent);color:#111111;font-weight:700">0</span>
+
+                <!-- Group: DATA MODEL -->
+                <div class="nav-group collapsed" data-group="data-model">
+                    <div class="nav-group-header" role="button" tabindex="0">
+                        <span class="material-symbols-outlined nav-group-icon">schema</span>
+                        <span class="nav-group-label">Data Model</span>
+                        <span class="material-symbols-outlined nav-group-chevron">expand_more</span>
+                    </div>
+                    <div class="nav-group-body">
+                        <div class="sidebar-section">
+                            <div class="sidebar-header" data-section="tables" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">table_chart</span>
+                                Tables
+                                <span class="sidebar-badge" id="sidebarTableCount">0</span>
+                                <button type="button" class="sidebar-chevron" aria-label="Toggle table list" aria-expanded="false" aria-controls="sidebarTableList">
+                                    <span class="material-symbols-outlined">expand_more</span>
+                                </button>
+                            </div>
+                            <div id="sidebarTableList" class="sidebar-children"></div>
+                        </div>
+                        <div class="sidebar-section">
+                            <div class="sidebar-header" data-section="measures" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">functions</span>
+                                Measure Catalog
+                                <span class="sidebar-badge" id="sidebarMeasureCount">0</span>
+                            </div>
+                        </div>
+                        <div class="sidebar-section">
+                            <div class="sidebar-header" data-section="relationships" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">device_hub</span>
+                                Relationships
+                                <span class="sidebar-badge" id="sidebarRelCount">0</span>
+                            </div>
+                        </div>
+                        <div class="sidebar-section" id="sidebarRolesSection">
+                            <div class="sidebar-header" data-section="roles" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">shield</span>
+                                Roles
+                                <span class="sidebar-badge" id="sidebarRoleCount">0</span>
+                            </div>
+                        </div>
+                        <div class="sidebar-section" id="sidebarExpressionsSection">
+                            <div class="sidebar-header" data-section="expressions" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">integration_instructions</span>
+                                Expressions
+                            </div>
+                        </div>
+                        <div class="sidebar-section hidden" id="sidebarDynamicSection">
+                            <div class="sidebar-header" data-section="dynamic-features" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">dynamic_form</span>
+                                Dynamic Features
+                                <span class="sidebar-badge" id="sidebarDynamicCount">0</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="sidebar-section hidden" id="sidebarReportPagesSection">
-                    <div class="sidebar-header" data-section="report-pages" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">auto_stories</span>
-                        Report Pages
-                        <span class="sidebar-badge" id="sidebarPageCount">0</span>
+
+                <!-- Group: QUALITY -->
+                <div class="nav-group collapsed" data-group="quality">
+                    <div class="nav-group-header" role="button" tabindex="0">
+                        <span class="material-symbols-outlined nav-group-icon">verified</span>
+                        <span class="nav-group-label">Quality</span>
+                        <span class="material-symbols-outlined nav-group-chevron">expand_more</span>
                     </div>
-                    <div id="sidebarPageList" class="sidebar-children"></div>
-                </div>
-                <div class="sidebar-section hidden" id="sidebarThemeSection">
-                    <div class="sidebar-header" data-section="theme" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">palette</span>
-                        Report Theme
-                    </div>
-                </div>
-                <div class="sidebar-section">
-                    <div class="sidebar-header" data-section="tables" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">table_chart</span>
-                        Tables
-                        <span class="sidebar-badge" id="sidebarTableCount">0</span>
-                        <button type="button" class="sidebar-chevron" aria-label="Toggle table list" aria-expanded="false" aria-controls="sidebarTableList">
-                            <span class="material-symbols-outlined">expand_more</span>
-                        </button>
-                    </div>
-                    <div id="sidebarTableList" class="sidebar-children"></div>
-                </div>
-                <div class="sidebar-section">
-                    <div class="sidebar-header" data-section="measures" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">functions</span>
-                        Measure Catalog
-                        <span class="sidebar-badge" id="sidebarMeasureCount">0</span>
-                    </div>
-                </div>
-                <div class="sidebar-section" id="sidebarVisualUsageSection">
-                    <div class="sidebar-header" data-section="visual-usage" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">visibility</span>
-                        Visual Usage
+                    <div class="nav-group-body">
+                        <div class="sidebar-section">
+                            <div class="sidebar-header" data-section="bpa" tabindex="0" role="button">
+                                <span class="material-symbols-outlined" style="color:var(--accent)">fact_check</span>
+                                Best Practices (BPA)
+                                <span class="sidebar-badge bpa-badge hidden" id="sidebarBpaBadge" style="background:var(--accent);color:#111111;font-weight:700">0</span>
+                            </div>
+                        </div>
+                        <div class="sidebar-section" id="sidebarFieldUsageSection">
+                            <div class="sidebar-header" data-section="field-usage" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">rule</span>
+                                Field Usage
+                                <span class="sidebar-badge" id="sidebarUnusedCount">0</span>
+                            </div>
+                        </div>
+                        <div class="sidebar-section" id="sidebarDataSourcesSection">
+                            <div class="sidebar-header" data-section="data-sources" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">storage</span>
+                                Data Sources
+                                <span class="sidebar-badge" id="sidebarDataSourceCount">0</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="sidebar-section" id="sidebarLineageSection">
-                    <div class="sidebar-header" data-section="lineage" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">account_tree</span>
-                        Visual Lineage
+
+                <!-- Group: REPORTS & VISUALS -->
+                <div class="nav-group collapsed" data-group="reports">
+                    <div class="nav-group-header" role="button" tabindex="0">
+                        <span class="material-symbols-outlined nav-group-icon">bar_chart</span>
+                        <span class="nav-group-label">Reports & Visuals</span>
+                        <span class="material-symbols-outlined nav-group-chevron">expand_more</span>
+                    </div>
+                    <div class="nav-group-body">
+                        <div class="sidebar-section hidden" id="sidebarReportPagesSection">
+                            <div class="sidebar-header" data-section="report-pages" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">auto_stories</span>
+                                Report Pages
+                                <span class="sidebar-badge" id="sidebarPageCount">0</span>
+                            </div>
+                            <div id="sidebarPageList" class="sidebar-children"></div>
+                        </div>
+                        <div class="sidebar-section hidden" id="sidebarThemeSection">
+                            <div class="sidebar-header" data-section="theme" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">palette</span>
+                                Report Theme
+                            </div>
+                        </div>
+                        <div class="sidebar-section" id="sidebarVisualUsageSection">
+                            <div class="sidebar-header" data-section="visual-usage" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">visibility</span>
+                                Visual Usage
+                            </div>
+                        </div>
+                        <div class="sidebar-section" id="sidebarLineageSection">
+                            <div class="sidebar-header" data-section="lineage" tabindex="0" role="button">
+                                <span class="material-symbols-outlined">account_tree</span>
+                                Visual Lineage
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="sidebar-section" id="sidebarFieldUsageSection">
-                    <div class="sidebar-header" data-section="field-usage" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">rule</span>
-                        Field Usage
-                        <span class="sidebar-badge" id="sidebarUnusedCount">0</span>
+
+                <!-- Group: AI & EXPORT -->
+                <div class="nav-group collapsed" data-group="ai-export">
+                    <div class="nav-group-header" role="button" tabindex="0">
+                        <span class="material-symbols-outlined nav-group-icon">smart_toy</span>
+                        <span class="nav-group-label">AI & Export</span>
+                        <span class="material-symbols-outlined nav-group-chevron">expand_more</span>
                     </div>
-                </div>
-                <div class="sidebar-section hidden" id="sidebarDynamicSection">
-                    <div class="sidebar-header" data-section="dynamic-features" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">dynamic_form</span>
-                        Dynamic Features
-                        <span class="sidebar-badge" id="sidebarDynamicCount">0</span>
-                    </div>
-                </div>
-                <div class="sidebar-section" id="sidebarDataSourcesSection">
-                    <div class="sidebar-header" data-section="data-sources" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">storage</span>
-                        Data Sources
-                        <span class="sidebar-badge" id="sidebarDataSourceCount">0</span>
-                    </div>
-                </div>
-                <div class="sidebar-section">
-                    <div class="sidebar-header" data-section="relationships" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">device_hub</span>
-                        Relationships
-                        <span class="sidebar-badge" id="sidebarRelCount">0</span>
-                    </div>
-                </div>
-                <div class="sidebar-section" id="sidebarRolesSection">
-                    <div class="sidebar-header" data-section="roles" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">shield</span>
-                        Roles
-                        <span class="sidebar-badge" id="sidebarRoleCount">0</span>
-                    </div>
-                </div>
-                <div class="sidebar-section" id="sidebarExpressionsSection">
-                    <div class="sidebar-header" data-section="expressions" tabindex="0" role="button">
-                        <span class="material-symbols-outlined">integration_instructions</span>
-                        Expressions
-                    </div>
-                </div>
-                <div class="sidebar-section" id="sidebarOntologySection">
-                    <div class="sidebar-header" data-section="ontology" tabindex="0" role="button" style="border-left:3px solid #86BC25">
-                        <span class="material-symbols-outlined" style="color:#86BC25">hub</span>
-                        Ontology
-                    </div>
-                </div>
-                <div class="sidebar-section" id="sidebarExecutiveSection">
-                    <div class="sidebar-header" data-section="executive" tabindex="0" role="button" style="border-left:3px solid #9b59b6">
-                        <span class="material-symbols-outlined" style="color:#9b59b6">leaderboard</span>
-                        Lederoversikt
-                    </div>
-                </div>
-                <div class="sidebar-section" id="sidebarAIContextSection">
-                    <div class="sidebar-header" data-section="ai-context" tabindex="0" role="button" style="border-left:3px solid #e67e22">
-                        <span class="material-symbols-outlined" style="color:#e67e22">smart_toy</span>
-                        AI Context
+                    <div class="nav-group-body">
+                        <div class="sidebar-section" id="sidebarOntologySection">
+                            <div class="sidebar-header" data-section="ontology" tabindex="0" role="button">
+                                <span class="material-symbols-outlined" style="color:#86BC25">hub</span>
+                                Ontology
+                            </div>
+                        </div>
+                        <div class="sidebar-section" id="sidebarExecutiveSection">
+                            <div class="sidebar-header" data-section="executive" tabindex="0" role="button">
+                                <span class="material-symbols-outlined" style="color:#9b59b6">leaderboard</span>
+                                Lederoversikt
+                            </div>
+                        </div>
+                        <div class="sidebar-section" id="sidebarAIContextSection">
+                            <div class="sidebar-header" data-section="ai-context" tabindex="0" role="button">
+                                <span class="material-symbols-outlined" style="color:#e67e22">smart_toy</span>
+                                AI Agent Export
+                            </div>
+                        </div>
                     </div>
                 </div>
             </aside>
@@ -811,8 +871,8 @@
 
                 <!-- AI Context -->
                 <div id="view-ai-context" class="section-view content-panel">
-                    <h2>AI Context</h2>
-                    <p class="section-subtitle">Eksporter komplett lineage-kontekst per rapportside som JSON — klar for Dagster, Parquet og Snowflake.</p>
+                    <h2>AI Agent Export</h2>
+                    <p class="section-subtitle">Eksporter katalogen i fire formater — star schema index, workspace-detaljfiler, vector JSONL for embedding og en klar-til-lim system prompt for AI-agenter.</p>
                     <div id="aiContextContent"></div>
                 </div>
 

@@ -144,7 +144,7 @@ const ExecutiveView = {
     },
 
     // ─────────────────────────────────────────────────────────────────────────
-    // AI Context — two-level export
+    // AI Agent Export — complete pipeline export for RAG/embedding at scale
     // ─────────────────────────────────────────────────────────────────────────
 
     renderAIContext(container, workspaces) {
@@ -153,181 +153,343 @@ const ExecutiveView = {
             return;
         }
 
-        container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-light)">Building index…</div>';
+        container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-light)">Building export…</div>';
 
-        // Defer so the loading text renders before the heavy build
         setTimeout(() => {
             const indexData = LineageExporter.toIndex(workspaces);
             const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-            // Stats row
-            const allSrcTypes = [...new Set((indexData.bridge_page_datasource||[]).map(b => b.dataSource))];
-            const srcChips = allSrcTypes.map(s =>
-                `<div class="aic-stat-chip aic-src-chip"><span class="material-symbols-outlined">database</span>${esc(s)}</div>`).join('');
+            // ── Readiness metrics ──────────────────────────────────────────────
+            let totalMeasures = 0, measuresWithDesc = 0;
+            let totalTables   = 0, tablesWithDesc   = 0;
+            let totalRoles    = 0, drillthroughCt   = 0;
 
-            // Build lookup maps from star schema tables
-            const reportByKey = Object.fromEntries((indexData.dim_report||[]).map(r => [r.reportKey, r]));
-            const wsMap       = Object.fromEntries((indexData.dim_workspace||[]).map(w => [w.workspaceKey, w.workspaceName]));
-            const srcByPageId = {};
-            for (const b of (indexData.bridge_page_datasource||[])) {
-                if (!srcByPageId[b.pageId]) srcByPageId[b.pageId] = [];
-                srcByPageId[b.pageId].push(b.dataSource);
+            for (const ws of workspaces) {
+                if (!ws.parsedModel) continue;
+                for (const t of (ws.parsedModel.tables || [])) {
+                    if (t._isAutoDate) continue;
+                    totalTables++;
+                    if (t.description) tablesWithDesc++;
+                    for (const m of (t.measures || [])) {
+                        totalMeasures++;
+                        if (m.description) measuresWithDesc++;
+                    }
+                }
+                totalRoles += (ws.parsedModel.roles || []).length;
             }
+            drillthroughCt = (indexData.fact_page || []).filter(p => p.isDrillthrough).length;
 
-            const previewPages = (indexData.fact_page||[]).filter(p => !p.isDrillthrough).slice(0, 12);
-            const previewRows = previewPages.map(p => {
-                const rep = reportByKey[p.reportKey] || {};
-                const wsName  = wsMap[p.workspaceKey] || p.workspaceKey || '—';
-                const repName = rep.reportName || p.reportKey || '—';
-                const srcs    = (srcByPageId[p.pageId] || []).join(', ') || '—';
-                return `
-                <tr>
-                    <td style="font-weight:500;color:var(--accent)">${esc(wsName)}</td>
-                    <td style="font-weight:500">${esc(repName)}</td>
-                    <td>${esc(p.pageName)}</td>
-                    <td style="color:var(--text-secondary);font-size:11px">${esc(srcs)}</td>
-                </tr>`;
-            }).join('');
-            const totalPageCount = (indexData.fact_page||[]).length;
-            const moreNote = totalPageCount > 12
-                ? `<div class="aic-preview-more">+ ${totalPageCount - 12} more pages in the downloaded file</div>` : '';
+            const mPct  = totalMeasures ? Math.round(measuresWithDesc / totalMeasures * 100) : 0;
+            const tPct  = totalTables   ? Math.round(tablesWithDesc   / totalTables   * 100) : 0;
+            const score = Math.round((mPct + tPct) / 2);
+            const scoreColor = score >= 60 ? '#2e7d32' : score >= 30 ? '#e67e22' : '#c62828';
 
-            const estimateKB = Math.round(JSON.stringify(indexData).length / 1024);
+            const bar = (pct, color) =>
+                `<div class="air-bar-track"><div class="air-bar-fill" style="width:${pct}%;background:${color}"></div></div>`;
 
-            // Per-workspace rows
+            // ── Source types ───────────────────────────────────────────────────
+            const allSrc = [...new Set((indexData.bridge_page_datasource||[]).map(b => b.dataSource))];
+
+            // ── Size estimates ─────────────────────────────────────────────────
+            const indexKB  = Math.round(JSON.stringify(indexData).length / 1024);
+            const jsonlStr = LineageExporter.toVectorJSONL(workspaces);
+            const jsonlKB  = Math.round(jsonlStr.length / 1024);
+            const promptStr = LineageExporter.toSystemPrompt(workspaces, indexData);
+            const promptKB  = Math.round(promptStr.length / 1024);
+
+            // ── Per-workspace detail rows ──────────────────────────────────────
             const wsRows = workspaces.map((ws, i) => {
                 const entry = indexData.dim_report[i] || {};
-                const srcBadges = (entry.dataSources||'').split(', ').filter(Boolean).map(s=>
-                    `<span class="aic-src-badge">${esc(s)}</span>`).join('');
                 const displayName = entry.reportName || ws._reportName || ws._wsFolder || ws.name;
-                return `
-                <div class="aic-ws-row">
+                const srcBadges = (entry.dataSources||'').split(', ').filter(Boolean)
+                    .map(s => `<span class="aic-src-badge">${esc(s)}</span>`).join('');
+                return `<div class="aic-ws-row">
                     <div class="aic-ws-info">
                         <div class="aic-ws-name">${esc(displayName)}</div>
-                        <div class="aic-ws-meta">
-                            ${entry.tableCount??'?'} tables &middot;
-                            ${entry.measureCount??'?'} measures &middot;
-                            ${entry.pageCount??'?'} pages
-                            ${srcBadges?`&nbsp;${srcBadges}`:''}
-                        </div>
+                        <div class="aic-ws-meta">${entry.tableCount??'?'} tables &middot; ${entry.measureCount??'?'} measures &middot; ${entry.pageCount??'?'} pages ${srcBadges ? '&nbsp;' + srcBadges : ''}</div>
                     </div>
                     <button class="aic-dl-btn aic-ws-dl" data-ws-idx="${i}">
-                        <span class="material-symbols-outlined" style="font-size:15px">download</span>
-                        Download detail
+                        <span class="material-symbols-outlined" style="font-size:15px">download</span> Download
                     </button>
                 </div>`;
             }).join('');
 
+            // ── Render ─────────────────────────────────────────────────────────
             container.innerHTML = `
-            <div class="aic-stats-row">
-                <div class="aic-stat-chip"><span class="material-symbols-outlined">folder_open</span><strong>${indexData._meta.workspaceCount}</strong> workspaces</div>
-                <div class="aic-stat-chip"><span class="material-symbols-outlined">description</span><strong>${indexData._meta.pageCount}</strong> pages</div>
-                <div class="aic-stat-chip"><span class="material-symbols-outlined">functions</span><strong>${indexData._meta.measureCount}</strong> measures</div>
-                ${srcChips}
+
+            <!-- Readiness panel -->
+            <div class="air-panel">
+                <div class="air-score-wrap">
+                    <div class="air-score-ring" style="--score-color:${scoreColor}">
+                        <span class="air-score-num">${score}</span>
+                        <span class="air-score-label">/ 100</span>
+                    </div>
+                    <div class="air-score-text">
+                        <div class="air-score-title">Catalog Readiness</div>
+                        <div class="air-score-sub">Based on measure &amp; table descriptions</div>
+                    </div>
+                </div>
+                <div class="air-metrics">
+                    <div class="air-metric">
+                        <div class="air-metric-label">Measures with description</div>
+                        ${bar(mPct, '#2e7d32')}
+                        <div class="air-metric-count">${measuresWithDesc} / ${totalMeasures} (${mPct}%)</div>
+                    </div>
+                    <div class="air-metric">
+                        <div class="air-metric-label">Tables with description</div>
+                        ${bar(tPct, '#0077b6')}
+                        <div class="air-metric-count">${tablesWithDesc} / ${totalTables} (${tPct}%)</div>
+                    </div>
+                    <div class="air-chips">
+                        <span class="air-chip"><span class="material-symbols-outlined">shield</span>${totalRoles} RLS role${totalRoles !== 1 ? 's' : ''}</span>
+                        <span class="air-chip"><span class="material-symbols-outlined">open_in_new</span>${drillthroughCt} drillthrough page${drillthroughCt !== 1 ? 's' : ''}</span>
+                        ${allSrc.map(s => `<span class="air-chip"><span class="material-symbols-outlined">storage</span>${esc(s)}</span>`).join('')}
+                    </div>
+                </div>
             </div>
 
-            <div class="aic-level-card">
-                <div class="aic-level-head">
-                    <div class="aic-level-badge">1</div>
-                    <div class="aic-level-text">
-                        <div class="aic-level-title">Index — all workspaces</div>
-                        <div class="aic-level-desc">
-                            Lightweight file (~${estimateKB} KB) with every page and its natural-language summary.
-                            The AI agent searches here to find the right workspace and page, then fetches the detail file.
+            <!-- Export cards -->
+            <div class="aie-grid">
+
+                <div class="aie-card">
+                    <div class="aie-card-head">
+                        <div class="aie-badge" style="background:#1a3a5c">1</div>
+                        <div>
+                            <div class="aie-title">Star Schema Index</div>
+                            <div class="aie-format">JSON · ${indexKB} KB</div>
                         </div>
                     </div>
-                    <button class="aic-dl-btn aic-dl-primary" id="aicDlIndex">
-                        <span class="material-symbols-outlined" style="font-size:15px">download</span>
-                        Download index.json
+                    <div class="aie-desc">Structured Power BI–importable star schema: <code>dim_workspace</code>, <code>dim_report</code>, <code>fact_page</code>, bridge tables. Use for filtered queries and PBI semantic model integration.</div>
+                    <button class="aie-btn" id="aicDlIndex">
+                        <span class="material-symbols-outlined">download</span> Download index.json
                     </button>
                 </div>
-                <div class="aic-preview-wrap">
-                    <div class="aic-preview-label">Preview — first ${previewPages.length} pages</div>
-                    <div style="overflow-x:auto">
-                        <table class="aic-preview-table">
-                            <thead><tr><th>Workspace</th><th>Report</th><th>Page</th><th>Data sources</th></tr></thead>
-                            <tbody>${previewRows}</tbody>
-                        </table>
-                    </div>
-                    ${moreNote}
-                </div>
-            </div>
 
-            <div class="aic-level-card">
-                <div class="aic-level-head">
-                    <div class="aic-level-badge">2</div>
-                    <div class="aic-level-text">
-                        <div class="aic-level-title">Detail — per workspace</div>
-                        <div class="aic-level-desc">
-                            Full context with DAX expressions, column mappings, relationships and RLS roles.
-                            Download only the workspace the AI agent needs to answer a specific question.
+                <div class="aie-card">
+                    <div class="aie-card-head">
+                        <div class="aie-badge" style="background:#2e7d32">2</div>
+                        <div>
+                            <div class="aie-title">Workspace Detail</div>
+                            <div class="aie-format">JSON · one file per workspace</div>
                         </div>
                     </div>
+                    <div class="aie-desc">Full DAX expressions, column mappings, relationships, RLS roles, and visual-level lineage. Fetch only the workspace the agent needs to answer a specific question.</div>
+                    <div class="aic-ws-list" style="margin-top:8px">${wsRows}</div>
                 </div>
-                <div class="aic-ws-list">${wsRows}</div>
-            </div>
 
-            <div class="aic-level-card">
-                <div class="aic-level-head">
-                    <div class="aic-level-badge" style="background:var(--accent-success,#2dd4bf)">3</div>
-                    <div class="aic-level-text">
-                        <div class="aic-level-title">Vector list — flat page index</div>
-                        <div class="aic-level-desc">
-                            One JSON document per page with all context pre-merged and a ready-to-embed
-                            <code>text</code> field. Drop directly into Pinecone, pgvector, or any RAG pipeline —
-                            no joins required.
+                <div class="aie-card">
+                    <div class="aie-card-head">
+                        <div class="aie-badge" style="background:#6a1b9a">3</div>
+                        <div>
+                            <div class="aie-title">Vector JSONL</div>
+                            <div class="aie-format">JSONL · ${jsonlKB} KB · ${(indexData.fact_page||[]).length} documents</div>
                         </div>
                     </div>
-                </div>
-                <div style="padding:0 16px 16px">
-                    <button class="aic-dl-btn" id="aicDlVector">
-                        <span class="material-symbols-outlined" style="font-size:15px">download</span>
-                        Download vector list
+                    <div class="aie-desc">One self-contained JSON object per line — the standard batch embedding format. Each document has a <code>text</code> field ready to embed and metadata fields for vector DB filtering.</div>
+                    <button class="aie-btn aie-btn-primary" id="aicDlJSONL">
+                        <span class="material-symbols-outlined">download</span> Download catalog.jsonl
                     </button>
+                </div>
+
+                <div class="aie-card">
+                    <div class="aie-card-head">
+                        <div class="aie-badge" style="background:#e67e22">4</div>
+                        <div>
+                            <div class="aie-title">Agent System Prompt</div>
+                            <div class="aie-format">Markdown · ${promptKB} KB</div>
+                        </div>
+                    </div>
+                    <div class="aie-desc">Ready-to-paste Markdown describing the catalog structure, workspaces, key KPIs, and tool usage instructions. Paste directly into your AI agent's system prompt.</div>
+                    <button class="aie-btn" id="aicDlPrompt">
+                        <span class="material-symbols-outlined">download</span> Download system-prompt.md
+                    </button>
+                </div>
+
+            </div>
+
+            <!-- Integration guide -->
+            <details class="aie-guide">
+                <summary class="aie-guide-summary">
+                    <span class="material-symbols-outlined">help_outline</span>
+                    How to wire this into an AI agent
+                </summary>
+                <div class="aie-guide-steps">
+                    <div class="aie-step">
+                        <div class="aie-step-num">1</div>
+                        <div><strong>Embed</strong> — Upload <code>catalog.jsonl</code> to your embedding pipeline (OpenAI batch files API, Cohere, Voyage AI). Each line's <code>text</code> field becomes a vector. Store with all metadata fields for filtering.</div>
+                    </div>
+                    <div class="aie-step">
+                        <div class="aie-step-num">2</div>
+                        <div><strong>Store</strong> — Upsert to Pinecone, pgvector, or Weaviate. Index on metadata: <code>workspace</code>, <code>report</code>, <code>dataSources[]</code>, <code>isDrillthrough</code>. Use <code>id</code> as the primary key.</div>
+                    </div>
+                    <div class="aie-step">
+                        <div class="aie-step-num">3</div>
+                        <div><strong>Query</strong> — Agent gets a question → vector search with optional metadata filter → top K pages → look up <code>detailFile</code> from the index → fetch the workspace detail JSON → answer with full DAX context.</div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- ── Star Schema diagram ──────────────────────────────────────── -->
+            <div class="aie-diagram-section">
+                <div class="aie-section-label">
+                    <span class="material-symbols-outlined">table_chart</span>
+                    Stjerneskjema — ${(indexData.fact_page||[]).length} sider · ${(indexData.dim_workspace||[]).length} workspace(s) · ${(indexData.bridge_page_measure||[]).length} measure-koblinger
+                </div>
+                <div class="aie-schema-wrap">
+                    <svg viewBox="0 0 730 375" xmlns="http://www.w3.org/2000/svg" class="aie-schema-svg">
+                        <defs>
+                            <marker id="aie-arr-blue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#0077b6"/></marker>
+                            <marker id="aie-arr-purple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#6a1b9a"/></marker>
+                            <marker id="aie-arr-dim" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#888"/></marker>
+                        </defs>
+
+                        <!-- dim_workspace → dim_report (snowflake hierarchy) -->
+                        <line x1="222" y1="65" x2="498" y2="65" stroke="#888" stroke-width="1" stroke-dasharray="5,3" marker-end="url(#aie-arr-dim)"/>
+                        <text x="360" y="58" text-anchor="middle" font-size="9" fill="#888">1 : many</text>
+
+                        <!-- dim_workspace → fact_page -->
+                        <line x1="120" y1="102" x2="302" y2="152" stroke="#0077b6" stroke-width="1.5" marker-end="url(#aie-arr-blue)"/>
+                        <!-- dim_report → fact_page -->
+                        <line x1="600" y1="102" x2="428" y2="152" stroke="#0077b6" stroke-width="1.5" marker-end="url(#aie-arr-blue)"/>
+                        <!-- fact_page → bridge_page_measure -->
+                        <line x1="298" y1="242" x2="165" y2="273" stroke="#6a1b9a" stroke-width="1.5" marker-end="url(#aie-arr-purple)"/>
+                        <!-- fact_page → bridge_page_datasource -->
+                        <line x1="432" y1="242" x2="567" y2="273" stroke="#6a1b9a" stroke-width="1.5" marker-end="url(#aie-arr-purple)"/>
+
+                        <!-- dim_workspace -->
+                        <rect x="20" y="30" width="200" height="72" rx="8" fill="var(--card-bg,#1a2744)" stroke="#0077b6" stroke-width="1.5"/>
+                        <text x="120" y="52" text-anchor="middle" font-size="12" font-weight="700" fill="var(--text,#e2e8f0)">dim_workspace</text>
+                        <text x="120" y="68" text-anchor="middle" font-size="10" fill="var(--text-secondary,#94a3b8)">workspaceKey · workspaceName</text>
+                        <text x="120" y="84" text-anchor="middle" font-size="10" font-weight="600" fill="#0077b6">${(indexData.dim_workspace||[]).length} rad(er)</text>
+
+                        <!-- dim_report -->
+                        <rect x="510" y="30" width="200" height="72" rx="8" fill="var(--card-bg,#1a2744)" stroke="#0077b6" stroke-width="1.5"/>
+                        <text x="610" y="52" text-anchor="middle" font-size="12" font-weight="700" fill="var(--text,#e2e8f0)">dim_report</text>
+                        <text x="610" y="68" text-anchor="middle" font-size="10" fill="var(--text-secondary,#94a3b8)">reportKey · reportName · detailFile</text>
+                        <text x="610" y="84" text-anchor="middle" font-size="10" font-weight="600" fill="#0077b6">${(indexData.dim_report||[]).length} rad(er)</text>
+
+                        <!-- fact_page (center, highlighted) -->
+                        <rect x="248" y="152" width="234" height="90" rx="8" fill="#0077b610" stroke="#0077b6" stroke-width="2.5"/>
+                        <text x="365" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="#0077b6">fact_page</text>
+                        <text x="365" y="190" text-anchor="middle" font-size="10" fill="var(--text-secondary,#94a3b8)">pageId · pageName · summary</text>
+                        <text x="365" y="205" text-anchor="middle" font-size="10" fill="var(--text-secondary,#94a3b8)">workspaceKey · reportKey · visualCount</text>
+                        <text x="365" y="222" text-anchor="middle" font-size="11" font-weight="700" fill="#0077b6">${(indexData.fact_page||[]).length} rad(er)</text>
+
+                        <!-- bridge_page_measure -->
+                        <rect x="20" y="273" width="200" height="62" rx="8" fill="var(--card-bg,#1a2744)" stroke="#6a1b9a" stroke-width="1.5"/>
+                        <text x="120" y="294" text-anchor="middle" font-size="11" font-weight="700" fill="var(--text,#e2e8f0)">bridge_page_measure</text>
+                        <text x="120" y="310" text-anchor="middle" font-size="10" fill="var(--text-secondary,#94a3b8)">pageId · measure</text>
+                        <text x="120" y="326" text-anchor="middle" font-size="10" font-weight="600" fill="#6a1b9a">${(indexData.bridge_page_measure||[]).length} rad(er)</text>
+
+                        <!-- bridge_page_datasource -->
+                        <rect x="500" y="273" width="220" height="62" rx="8" fill="var(--card-bg,#1a2744)" stroke="#6a1b9a" stroke-width="1.5"/>
+                        <text x="610" y="294" text-anchor="middle" font-size="11" font-weight="700" fill="var(--text,#e2e8f0)">bridge_page_datasource</text>
+                        <text x="610" y="310" text-anchor="middle" font-size="10" fill="var(--text-secondary,#94a3b8)">pageId · dataSource</text>
+                        <text x="610" y="326" text-anchor="middle" font-size="10" font-weight="600" fill="#6a1b9a">${(indexData.bridge_page_datasource||[]).length} rad(er)</text>
+
+                        <!-- Legend -->
+                        <line x1="20" y1="356" x2="50" y2="356" stroke="#0077b6" stroke-width="1.5" marker-end="url(#aie-arr-blue)"/>
+                        <text x="55" y="360" font-size="10" fill="var(--text-secondary,#94a3b8)">Dimensjon → Fakta</text>
+                        <line x1="210" y1="356" x2="240" y2="356" stroke="#6a1b9a" stroke-width="1.5" marker-end="url(#aie-arr-purple)"/>
+                        <text x="245" y="360" font-size="10" fill="var(--text-secondary,#94a3b8)">Fakta → Bro</text>
+                        <line x1="370" y1="356" x2="400" y2="356" stroke="#888" stroke-width="1" stroke-dasharray="5,3" marker-end="url(#aie-arr-dim)"/>
+                        <text x="405" y="360" font-size="10" fill="var(--text-secondary,#94a3b8)">Snøflak-hierarki</text>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- ── Agent query flow ──────────────────────────────────────────── -->
+            <div class="aie-diagram-section" style="margin-top:16px">
+                <div class="aie-section-label">
+                    <span class="material-symbols-outlined">alt_route</span>
+                    Agent query-flyt
+                </div>
+                <div class="aie-flow-wrap">
+                    <div class="aie-flow-step">
+                        <div class="aie-flow-icon" style="background:#1a3a5c">
+                            <span class="material-symbols-outlined">person</span>
+                        </div>
+                        <div class="aie-flow-label">Bruker-<br>spørsmål</div>
+                    </div>
+                    <div class="aie-flow-arrow">›</div>
+                    <div class="aie-flow-step">
+                        <div class="aie-flow-icon" style="background:#6a1b9a">
+                            <span class="material-symbols-outlined">travel_explore</span>
+                        </div>
+                        <div class="aie-flow-label">Vector<br>search</div>
+                        <div class="aie-flow-sub">catalog.jsonl<br>Pinecone/pgvector</div>
+                    </div>
+                    <div class="aie-flow-arrow">›</div>
+                    <div class="aie-flow-step">
+                        <div class="aie-flow-icon" style="background:#0e6896">
+                            <span class="material-symbols-outlined">filter_list</span>
+                        </div>
+                        <div class="aie-flow-label">Topp K<br>sider</div>
+                        <div class="aie-flow-sub">fra fact_page<br>+ metadata-filter</div>
+                    </div>
+                    <div class="aie-flow-arrow">›</div>
+                    <div class="aie-flow-step">
+                        <div class="aie-flow-icon" style="background:#1a4a2a">
+                            <span class="material-symbols-outlined">find_in_page</span>
+                        </div>
+                        <div class="aie-flow-label">Slå opp<br>detailFile</div>
+                        <div class="aie-flow-sub">dim_report<br>→ index.json</div>
+                    </div>
+                    <div class="aie-flow-arrow">›</div>
+                    <div class="aie-flow-step">
+                        <div class="aie-flow-icon" style="background:#7a3a00">
+                            <span class="material-symbols-outlined">cloud_download</span>
+                        </div>
+                        <div class="aie-flow-label">Hent<br>detail JSON</div>
+                        <div class="aie-flow-sub">DAX · relasjoner<br>RLS · kolonner</div>
+                    </div>
+                    <div class="aie-flow-arrow">›</div>
+                    <div class="aie-flow-step">
+                        <div class="aie-flow-icon" style="background:#6a1b1b">
+                            <span class="material-symbols-outlined">smart_toy</span>
+                        </div>
+                        <div class="aie-flow-label">AI-agent<br>svarer</div>
+                        <div class="aie-flow-sub">system prompt<br>+ full kontekst</div>
+                    </div>
                 </div>
             </div>`;
 
+            // ── Event listeners ────────────────────────────────────────────────
             document.getElementById('aicDlIndex').addEventListener('click', () => {
                 LineageExporter.download(indexData, 'all-workspaces-index');
             });
 
+            document.getElementById('aicDlJSONL').addEventListener('click', () => {
+                const btn = document.getElementById('aicDlJSONL');
+                const orig = btn.innerHTML;
+                btn.disabled = true;
+                btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:15px">hourglass_top</span> Building…';
+                setTimeout(() => {
+                    try { LineageExporter.downloadText(jsonlStr, 'catalog.jsonl', 'application/jsonl'); }
+                    finally { btn.disabled = false; btn.innerHTML = orig; }
+                }, 30);
+            });
+
+            document.getElementById('aicDlPrompt').addEventListener('click', () => {
+                LineageExporter.downloadText(promptStr, 'system-prompt.md', 'text/markdown');
+            });
+
             container.querySelectorAll('.aic-ws-dl').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    const idx  = parseInt(btn.dataset.wsIdx, 10);
-                    const ws   = workspaces[idx];
+                    const idx = parseInt(btn.dataset.wsIdx, 10);
+                    const ws  = workspaces[idx];
                     if (!ws) return;
                     const orig = btn.innerHTML;
                     btn.disabled = true;
-                    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:15px">hourglass_top</span> Building…';
+                    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:15px">hourglass_top</span>';
                     setTimeout(() => {
                         try {
                             const data = LineageExporter.toAIContext(ws.parsedModel, ws.visualData, ws.lineageEngine);
                             LineageExporter.download(data, data.model?.name || ws.name);
-                        } finally {
-                            btn.disabled = false;
-                            btn.innerHTML = orig;
-                        }
+                        } finally { btn.disabled = false; btn.innerHTML = orig; }
                     }, 30);
                 });
             });
-
-            const vectorBtn = document.getElementById('aicDlVector');
-            if (vectorBtn) {
-                vectorBtn.addEventListener('click', () => {
-                    const orig = vectorBtn.innerHTML;
-                    vectorBtn.disabled = true;
-                    vectorBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:15px">hourglass_top</span> Building…';
-                    setTimeout(() => {
-                        try {
-                            const docs = LineageExporter.toVectorList(workspaces);
-                            LineageExporter.download(docs, 'all-workspaces-vector-list');
-                        } finally {
-                            vectorBtn.disabled = false;
-                            vectorBtn.innerHTML = orig;
-                        }
-                    }, 30);
-                });
-            }
         }, 30);
     },
 

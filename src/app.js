@@ -110,6 +110,18 @@ class App {
             });
         });
 
+        // Nav group toggle (collapse/expand)
+        document.querySelectorAll('.nav-group-header').forEach(header => {
+            const toggle = () => {
+                const group = header.closest('.nav-group');
+                if (group) group.classList.toggle('collapsed');
+            };
+            header.addEventListener('click', toggle);
+            header.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+            });
+        });
+
         // Sidebar delegated click handlers (one listener per list, not per item)
         document.getElementById('sidebarTableList').addEventListener('click', (e) => {
             const item = e.target.closest('.sidebar-item[data-table]');
@@ -404,11 +416,13 @@ class App {
                 // Folder contains multiple workspace sub-folders â€” load all at once
                 await this._loadWorkspaceCollection(result.workspaceCollection);
             } else if (result.needsDiscovery) {
-                // Auto-select all models paired with their matching report and load all at once
+                // Auto-select all models paired with their matching report and load all at once.
+                // Use the selected folder name as the workspace name (e.g. "md"), not the model prefix.
+                const wsName = this.folderHandle.name;
                 const collectionItems = result.models.map(modelHandle => {
                     const prefix = modelHandle.name.replace('.SemanticModel', '');
                     const reportHandle = result.reports.find(r => r.name.startsWith(prefix)) || null;
-                    return { name: prefix, modelHandle, reportHandle };
+                    return { name: wsName, modelHandle, reportHandle };
                 });
                 await this._loadWorkspaceCollection(collectionItems);
             } else {
@@ -636,12 +650,15 @@ class App {
             this.reportHandles = item.reportHandle ? [item.reportHandle] : [];
             this.showLoading(true, `Loading workspace ${i + 1} / ${items.length}: ${item.name}`);
             await this.parseModel();
-            // Store workspace folder name ("md") and report/model name for exports
+            // Store workspace folder name ("md") and report/model name for exports.
+            // Must be set AFTER parseModel() returns, then re-render tabs so cards show the correct names.
             const loadedWs = this._workspaces[this._activeWsIdx];
             if (loadedWs) {
                 loadedWs._wsFolder    = item.name;
                 loadedWs._reportName  = item.modelHandle.name.replace(/\.SemanticModel$/i, '').trim();
             }
+            this._renderWorkspaceTabs();
+            this._renderSidebarWorkspaceList();
         }
         this.showLoading(false);
     }
@@ -688,35 +705,57 @@ class App {
         }
         bar.classList.remove('hidden');
 
+        // Aggregate stats
+        const uniqueWsFolders = new Set(this._workspaces.map(w => w._wsFolder || w.name).filter(Boolean));
+        const wsCount     = uniqueWsFolders.size || this._workspaces.length;
+        const modelCount  = this._workspaces.length;
+        const reportCount = this._workspaces.filter(w => (w.visualData?.pages?.length ?? 0) > 0).length;
+        const aggEl = document.getElementById('wsNavAgg');
+        if (aggEl) {
+            aggEl.innerHTML =
+                `<span class="ws-nav-agg-item"><strong>${wsCount}</strong> ${wsCount === 1 ? 'workspace' : 'workspaces'}</span>` +
+                `<span class="ws-nav-agg-sep">&middot;</span>` +
+                `<span class="ws-nav-agg-item"><strong>${modelCount}</strong> ${modelCount === 1 ? 'semantic model' : 'semantic models'}</span>` +
+                `<span class="ws-nav-agg-sep">&middot;</span>` +
+                `<span class="ws-nav-agg-item"><strong>${reportCount}</strong> ${reportCount === 1 ? 'report' : 'reports'}</span>`;
+        }
+
+        // Workspace cards
         let html = '';
         this._workspaces.forEach((ws, idx) => {
-            const active = idx === this._activeWsIdx ? ' active' : '';
-            html += `<button class="ws-tab${active}" data-ws-idx="${idx}" title="${this._esc(ws.name)}">
-                <span class="material-symbols-outlined" style="font-size:14px;flex-shrink:0">dataset</span>
-                ${this._esc(ws.name.length > 22 ? ws.name.slice(0, 20) + 'â€¦' : ws.name)}
-                <span class="ws-tab-close" data-ws-close="${idx}" title="Close">&times;</span>
-            </button>`;
+            const active     = idx === this._activeWsIdx ? ' active' : '';
+            const wsFolder   = this._esc(ws._wsFolder || ws.name || '—');
+            const modelName  = ws._reportName || ws.name || '—';
+            const display    = modelName.length > 22 ? modelName.slice(0, 20) + '…' : modelName;
+            const tables     = ws.parsedModel?.tables?.filter(t => !t._isAutoDate)?.length ?? '—';
+            const measures   = ws.parsedModel?.tables?.reduce((s, t) => s + (t.measures?.length || 0), 0) ?? '—';
+            const pages      = ws.visualData?.pages?.length ?? '—';
+
+            html += `<div class="ws-card${active}" data-ws-idx="${idx}" title="${this._esc(modelName)}">` +
+                `<button class="ws-card-close" data-ws-close="${idx}" title="Close">&times;</button>` +
+                `<div class="ws-card-workspace">${wsFolder}</div>` +
+                `<div class="ws-card-model">${this._esc(display)}</div>` +
+                `<div class="ws-card-stats">${tables} tables &middot; ${measures} measures &middot; ${pages} pages</div>` +
+                `</div>`;
         });
-        html += `<button class="ws-tab ws-tab-add" id="wsAddBtn" title="Open another workspace">
-            <span class="material-symbols-outlined" style="font-size:15px">add</span>
-        </button>`;
+        html += `<div class="ws-card ws-card-add" id="wsAddBtn" title="Open another workspace">` +
+            `<span class="material-symbols-outlined" style="font-size:20px">add</span></div>`;
         bar.innerHTML = html;
 
-        // Bind tab clicks
-        bar.querySelectorAll('.ws-tab[data-ws-idx]').forEach(btn => {
-            btn.addEventListener('click', e => {
+        // Bind card clicks
+        bar.querySelectorAll('.ws-card[data-ws-idx]').forEach(card => {
+            card.addEventListener('click', e => {
                 const closeBtn = e.target.closest('[data-ws-close]');
                 if (closeBtn) {
                     e.stopPropagation();
                     this._closeWorkspace(parseInt(closeBtn.dataset.wsClose, 10));
                     return;
                 }
-                const idx = parseInt(btn.dataset.wsIdx, 10);
+                const idx = parseInt(card.dataset.wsIdx, 10);
                 if (idx !== this._activeWsIdx) this._switchWorkspace(idx);
             });
         });
 
-        // "Add workspace" → open folder picker
         bar.querySelector('#wsAddBtn')?.addEventListener('click', () => this.openFolder());
     }
 
@@ -1518,6 +1557,16 @@ class App {
         document.querySelectorAll('.sidebar-header').forEach(h => h.classList.remove('active'));
         const header = document.querySelector(`.sidebar-header[data-section="${section}"]`);
         if (header) header.classList.add('active');
+
+        // Auto-expand the group containing this section, collapse others, mark has-active
+        document.querySelectorAll('.nav-group').forEach(g => g.classList.remove('has-active'));
+        if (header) {
+            const group = header.closest('.nav-group');
+            if (group) {
+                group.classList.remove('collapsed');
+                group.classList.add('has-active');
+            }
+        }
 
         document.querySelectorAll('.sidebar-item').forEach(item => item.classList.remove('active'));
 

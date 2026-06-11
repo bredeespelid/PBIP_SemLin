@@ -466,6 +466,71 @@ const LineageExporter = {
         return docs;
     },
 
+    // ── Vector JSONL export ───────────────────────────────────────────────────
+    // Standard format for batch embedding APIs (OpenAI Files API, Cohere, Voyage).
+    // One self-contained JSON object per line — no outer array.
+    toVectorJSONL(workspaces) {
+        const docs = this.toVectorList(workspaces);
+        return docs.map(d => JSON.stringify(d)).join('\n');
+    },
+
+    // ── Agent system prompt generator ─────────────────────────────────────────
+    // Markdown string that an AI agent can use as its system prompt or knowledge base.
+    toSystemPrompt(workspaces, indexData) {
+        const meta   = indexData._meta || {};
+        const date   = new Date().toISOString().slice(0, 10);
+        const allSrc = [...new Set((indexData.bridge_page_datasource || []).map(b => b.dataSource))];
+
+        // Key KPIs: measures appearing on 3+ distinct pages
+        const measurePageCount = {};
+        for (const b of (indexData.bridge_page_measure || [])) {
+            measurePageCount[b.measure] = (measurePageCount[b.measure] || new Set()).add(b.pageId);
+        }
+        const keyKPIs = Object.entries(measurePageCount)
+            .filter(([, pages]) => pages.size >= 3)
+            .sort((a, b) => b[1].size - a[1].size)
+            .map(([name, pages]) => `- **${name}** (used on ${pages.size} pages)`);
+
+        const drillthroughCount = (indexData.fact_page || []).filter(p => p.isDrillthrough).length;
+
+        // Per-workspace sections
+        const wsSections = (indexData.dim_report || []).map(rep => {
+            const ws = (indexData.dim_workspace || []).find(w => w.workspaceKey === rep.workspaceKey);
+            const pages = (indexData.fact_page || [])
+                .filter(p => p.reportKey === rep.reportKey)
+                .slice(0, 5)
+                .map(p => p.pageName);
+            return `### ${ws?.workspaceName || rep.workspaceKey} — ${rep.reportName}
+- Tables: ${rep.tableCount} | Measures: ${rep.measureCount} | Pages: ${rep.pageCount}
+- Data sources: ${rep.dataSources}
+- Key pages: ${pages.join(', ')}
+- Detail file: \`${rep.detailFile}\``;
+        }).join('\n\n');
+
+        return `# Power BI Catalog — AI Agent System Prompt
+Generated: ${date}
+
+## What you know
+You have access to a Power BI catalog with **${meta.workspaceCount || 1} workspace(s)**, **${meta.reportCount || 1} report(s)**, and **${meta.pageCount || 0} report pages** containing **${meta.measureCount || 0} measures**.
+All data is sourced from: ${allSrc.join(', ') || 'unknown'}.
+
+## Workspaces
+${wsSections}
+
+## How to use this catalog
+1. Use \`vector_search(query)\` to find relevant report pages by semantic similarity against the embedded JSONL catalog.
+2. Use \`get_detail("{workspaceKey}")\` to retrieve full DAX expressions, column mappings, relationships, and RLS roles for a specific workspace.
+3. Drillthrough pages (${drillthroughCount} total) provide row-level detail — navigate to them when a user asks for specifics on individual records.
+4. All page IDs in vector search results match \`pages[].id\` in the detail files — join on this field for full context.
+
+## Key KPIs (used on 3+ pages)
+${keyKPIs.length ? keyKPIs.join('\n') : '_No measures appear on 3+ pages._'}
+
+## Data freshness
+This catalog was generated on ${date}. Re-export after semantic model changes.
+`;
+    },
+
     download(data, modelName) {
         const filename = `${(modelName || 'model').replace(/[^a-z0-9]/gi, '_')}-ai-context.json`;
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -473,6 +538,17 @@ const LineageExporter = {
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    },
+
+    downloadText(text, filename, mimeType = 'text/plain') {
+        const blob = new Blob([text], { type: mimeType });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
